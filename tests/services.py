@@ -170,7 +170,20 @@ class Toxiproxy:
         self.http().post(f"{self.api}/proxies/{proxy}", json={"enabled": enabled}).raise_for_status()
 
     def reset(self) -> None:
+        """Remove every toxic and re-enable every proxy."""
         self.http().post(f"{self.api}/reset").raise_for_status()
+
+    def clear(self) -> None:
+        """Delete every proxy. Safer than reset between tests: reset re-binds a disabled proxy's
+        old port, which a new test server may have taken meanwhile."""
+        s = self.http()
+        for name in s.get(f"{self.api}/proxies").json():
+            s.delete(f"{self.api}/proxies/{name}")
+
+    def remove_toxics(self, proxy: str) -> None:
+        s = self.http()
+        for t in s.get(f"{self.api}/proxies/{proxy}/toxics").json():
+            s.delete(f"{self.api}/proxies/{proxy}/toxics/{t['name']}")
 
     def stop(self) -> None:
         if self.proc:

@@ -1,0 +1,5 @@
+# Load test layout: three shard processes, four logical shards each (the default layout,
+# without the standby, so all three layouts compare like for like).
+#   docker compose -f docker-compose.yml -f loadtest/shards-3.yml up -d
+services:
+  standby: {profiles: [off]}

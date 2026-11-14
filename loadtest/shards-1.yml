@@ -1,0 +1,7 @@
+# Load test layout: one shard process owns all 12 logical shards.
+#   docker compose -f docker-compose.yml -f loadtest/shards-1.yml up -d
+services:
+  shard-1: {command: python -m settle.shard --logical 0-11}
+  shard-2: {profiles: [off]}
+  shard-3: {profiles: [off]}
+  standby: {profiles: [off]}

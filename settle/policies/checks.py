@@ -4,6 +4,11 @@ NPCI's 2025 rules (UPI-OC-215): the first status check only 90 seconds after the
 at most three checks within two hours, at least 90 seconds apart, and none after a transport
 error. A check only helps if the answer is ready, so the percentile planner checks when this
 PSP's answers are usually ready, then moves each time later if the rules need it.
+
+The simulator found the one change from the spec's planner: with the last check at the 95th
+percentile, a PSP with a long tail (median 60 s, but some answers take many minutes) had its
+last check at about 5 minutes, earlier than the fixed plan's 9, and four times as many of its
+lost callbacks went to ops. The last check now never comes earlier than the fixed plan's.
 """
 
 from __future__ import annotations
@@ -34,12 +39,14 @@ def percentile(values: list[float], p: float) -> float:
 
 
 def plan_checks(resolution_times: list[float], min_samples: int = 50) -> tuple[int, ...]:
-    """Check when this PSP's answers are usually ready: at its 50th, 80th and 95th percentile
-    time from sending to the final answer. Too little history: use the fixed plan."""
+    """Check when this PSP's answers are usually ready: at its 50th and 80th percentile time from
+    sending to the final answer, and the last check at its 95th percentile but never earlier than
+    the fixed plan's last check. The last check is the last chance before ops, so on a PSP with a
+    long tail it is worth waiting for. Too little history: use the fixed plan."""
     if len(resolution_times) < min_samples:
         return FIXED
     s = sorted(resolution_times)
-    return fit_to_rules([percentile(s, p) for p in (0.50, 0.80, 0.95)])
+    return fit_to_rules([percentile(s, 0.50), percentile(s, 0.80), max(percentile(s, 0.95), FIXED[-1])])
 
 
 class CheckPlanner(Protocol):

@@ -120,7 +120,8 @@ def test_planner_checks_late_for_a_slow_psp_and_early_for_a_fast_one() -> None:
         planner.observe("fast", rng.uniform(2, 40))
     slow = planner.plan("slow")
     assert slow[0] > 270 and len(slow) == 3
-    assert planner.plan("fast") == (90, 180, 270)  # the earliest legal times
+    # the earliest legal times, except the last check: never earlier than the fixed plan's
+    assert planner.plan("fast") == (90, 180, 540)
 
 
 def test_timer_queue_is_a_min_heap_with_stable_ties() -> None:

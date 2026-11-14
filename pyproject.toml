@@ -1,0 +1,49 @@
+[project]
+name = "settle"
+version = "0.4.0"
+description = "A UPI payment orchestrator for one merchant: routing, a strict state machine, NPCI-limited status checks and automatic refunds"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Srija Malhar" }]
+dependencies = [
+    "flask>=3.0",
+    "waitress>=3.0",
+    "requests>=2.32",
+    "psycopg[binary]>=3.2",
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "hypothesis>=6.100",
+    "mypy>=1.10",
+    "types-requests",
+]
+load = ["locust>=2.32"]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["settle*", "sim*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "postgres: needs a real PostgreSQL server",
+    "redis: needs a real Redis server",
+    "toxiproxy: needs a real Toxiproxy server",
+    "slow: takes more than a few seconds",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["settle", "sim"]
+
+[[tool.mypy.overrides]]
+module = ["waitress", "waitress.*", "locust", "locust.*"]
+ignore_missing_imports = true

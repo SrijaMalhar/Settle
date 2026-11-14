@@ -142,6 +142,7 @@ class Attempt:
     went_pending: bool = False  # a timeout, a deemed answer, a restart, or a status check
     plan: tuple[float, ...] = ()  # when its status checks are due (absolute times)
     checks: tuple[float, ...] = ()  # when status checks were actually spent
+    answered: int = 0  # how many of those checks came back with an answer Settle stored
     checks_stopped: bool = False  # a check hit a transport error: NPCI says stop
     give_up_at: float | None = None
     code: str | None = None  # the NPCI code of a failure

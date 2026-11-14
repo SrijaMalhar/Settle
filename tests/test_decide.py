@@ -272,15 +272,31 @@ def test_recovery_treats_sending_as_unknown_and_never_resends(story: Story) -> N
     assert {c.timer for c in commands if isinstance(c, SetTimer)} == {"check", "hold"}
 
 
-def test_recovery_after_the_last_checks_answer_was_lost(story: Story) -> None:
+def test_a_check_whose_answer_died_in_a_crash_stops_checking(story: Story) -> None:
+    """The lost answer may have been a transport error, after which NPCI forbids another check."""
     story(pay())
     story(answer("read_timeout"))
-    for n, t in ((1, 90), (2, 270)):
-        story(TimerFired(now=T0 + t, kind="check", ref="p00x.1", n=n))
-        story(answer("pending", via="check", check=n, now=T0 + t + 1))
-    story(TimerFired(now=T0 + 540, kind="check", ref="p00x.1", n=3))  # then the crash
-    story(Recover(now=T0 + 560))
-    assert story.attempt() is S.UNRESOLVED
+    story(TimerFired(now=T0 + 90, kind="check", ref="p00x.1", n=1))
+    story(answer("pending", via="check", check=1, now=T0 + 91))
+    story(TimerFired(now=T0 + 270, kind="check", ref="p00x.1", n=2))  # then the crash
+    events, commands = story(Recover(now=T0 + 275))
+    assert kinds(events) == ["ChecksStopped"]
+    assert getattr(events[0], "reason") == "check_answer_lost"
+    assert not any(isinstance(c, SetTimer) and c.timer == "check" for c in commands)
+    give_up = [c for c in commands if isinstance(c, SetTimer) and c.timer == "give_up"][0]
+    story(answer("success", via="callback", now=T0 + 300))  # a callback still settles it
+    assert story.attempt() is S.SUCCEEDED
+    assert give_up.at >= T0 + 365
+
+
+def test_recovery_resumes_checks_when_every_answer_was_stored(story: Story) -> None:
+    story(pay())
+    story(answer("read_timeout"))
+    story(TimerFired(now=T0 + 90, kind="check", ref="p00x.1", n=1))
+    story(answer("pending", via="check", check=1, now=T0 + 91))
+    _, commands = story(Recover(now=T0 + 100))
+    check = [c for c in commands if isinstance(c, SetTimer) and c.timer == "check"][0]
+    assert (check.at, check.n) == (T0 + 270, 2)
 
 
 def test_recovery_resends_an_unconfirmed_refund_with_the_same_id(story: Story) -> None:

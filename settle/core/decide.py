@@ -17,6 +17,7 @@ from settle.core.messages import (
     AttemptMoved,
     AttemptStarted,
     CancelRequested,
+    CheckAnswered,
     CheckSpent,
     ChecksStopped,
     CheckStatus,
@@ -249,8 +250,11 @@ def _moved(
     now = out.now
     plan: tuple[float, ...] = ()
     if new is S.PENDING:
-        first = 30 if "early_check" in out.bugs else FIRST
-        rel = fit_to_rules(list(offsets), first=first) or fit_to_rules(list(FIXED), first=first)
+        wanted = list(offsets) or list(FIXED)
+        if "early_check" in out.bugs:
+            wanted = [30.0] + wanted[1:]  # the planted bug: a first check 30 seconds after sending
+        first = _first_offset(out.bugs)
+        rel = fit_to_rules(wanted, first=first) or fit_to_rules(list(FIXED), first=first)
         plan = tuple(a.started_at + t for t in rel)
     went_pending = a.went_pending or signal in PENDING_SIGNALS or via in ("check", "settlement")
     outcome = None
@@ -262,7 +266,9 @@ def _moved(
         code = NOT_DELIVERED if signal == "not_delivered" else None
     if new is S.UNRESOLVED:
         code = TIMEOUT  # the PSP never gave an answer
-    took = round(now - a.started_at, 6) if signal in ("success", "failure") else None
+    # When the PSP's answer was ready. Only a callback or the PSP's own reply says that; a check or a
+    # settlement file only says when Settle found out, which would teach the planner the wrong times.
+    took = round(now - a.started_at, 6) if signal in ("success", "failure") and via in ("callback", "reply") else None
     out.emit(
         AttemptMoved(
             at=now,
@@ -378,8 +384,9 @@ def _check_due(out: _Out, inp: TimerFired) -> None:
 
 def _check_pending(out: _Out, a: Attempt, n: int) -> _Out:
     """A check came back "still pending"."""
-    if a.status is not S.PENDING or a.checks_stopped or n != len(a.checks):
+    if a.status is not S.PENDING or a.checks_stopped or n != len(a.checks) or a.answered >= n:
         return out  # stale
+    out.emit(CheckAnswered(at=out.now, attempt=a.id, n=n))
     nxt = _next_check_time(a, len(a.checks), out.bugs)
     if nxt is None:
         return _exhaust(out, a)
@@ -387,12 +394,12 @@ def _check_pending(out: _Out, a: Attempt, n: int) -> _Out:
     return out
 
 
-def _check_stopped(out: _Out, a: Attempt) -> _Out:
+def _check_stopped(out: _Out, a: Attempt, why: str = "transport_error") -> _Out:
     """A check hit a transport error. NPCI: stop checking; wait for a callback, then ops."""
     if a.status is not S.PENDING or a.checks_stopped:
         return out
     give_up_at = max(a.plan[-1] if a.plan else out.now, out.now + GAP)
-    out.emit(ChecksStopped(at=out.now, attempt=a.id, reason="transport_error", give_up_at=give_up_at))
+    out.emit(ChecksStopped(at=out.now, attempt=a.id, reason=why, give_up_at=give_up_at))
     out.do(SetTimer(timer="give_up", at=give_up_at, ref=a.id))
     return out
 
@@ -467,9 +474,14 @@ def _recover(p: Payment, inp: Recover, bugs: frozenset[str]) -> _Out:
             if a.checks_stopped:
                 out.do(SetTimer(timer="give_up", at=a.give_up_at or inp.now, ref=a.id))
                 continue
+            if len(a.checks) > a.answered:
+                # A check went out and its answer died with the old process. It may have hit a
+                # transport error, after which NPCI forbids another check, so stop and wait.
+                _check_stopped(out, a, "check_answer_lost")
+                continue
             nxt = _next_check_time(a, len(a.checks), bugs)
             if nxt is None:
-                _exhaust(out, a)  # the last check's answer was lost in the crash
+                _exhaust(out, a)
             else:
                 out.do(SetTimer(timer="check", at=nxt, ref=a.id, n=len(a.checks) + 1))
     if out.pay.status is P.AWAITING:
@@ -536,6 +548,8 @@ def apply(p: Payment | None, e: Event) -> Payment:
             if a is None:
                 raise IllegalMove(f"no attempt {e.attempt}")
             return _with_attempt(p, e.attempt, checks=a.checks + (e.at,))
+        case CheckAnswered():
+            return _with_attempt(p, e.attempt, answered=e.n)
         case ChecksStopped():
             return _with_attempt(p, e.attempt, checks_stopped=True, give_up_at=e.give_up_at)
         case PaymentPaid():

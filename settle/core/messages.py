@@ -131,12 +131,21 @@ class AttemptMoved(Event):
     via: str
     code: str | None = None
     plan: tuple[float, ...] = ()  # set when the attempt goes pending
-    took: float | None = None  # seconds from sending to the final answer
+    took: float | None = None  # seconds from sending to the PSP's answer (callbacks and replies only)
     outcome: str | None = None  # clean, pending_success or failed, for the router
 
 
 @dataclass(frozen=True, kw_only=True)
 class CheckSpent(Event):
+    attempt: str
+    n: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class CheckAnswered(Event):
+    """A status check came back "still pending". Stored so that after a crash Settle can tell a
+    check that was answered from one whose answer was lost."""
+
     attempt: str
     n: int
 

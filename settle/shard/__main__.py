@@ -71,7 +71,7 @@ def main(argv: list[str] | None = None) -> None:
     app = create_app(shard, secret=settings.psp_secret,
                      extra_stats=lambda: {"name": args.name, "url": url, "stats": stats.snapshot()})
     try:
-        serve(app, host="0.0.0.0", port=settings.port, threads=32, ident=None)
+        serve(app, host="0.0.0.0", port=settings.port, threads=48, connection_limit=2000, ident=None)
     finally:
         sys.exit(1)
 

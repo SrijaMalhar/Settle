@@ -17,6 +17,7 @@ from typing import Any
 
 import psycopg
 import requests
+import requests.adapters
 from flask import Flask, Response, jsonify, request
 from flask.typing import ResponseReturnValue
 
@@ -70,19 +71,33 @@ class OwnerMap:
 
 
 class Gateway:
-    def __init__(self, owners: OwnerMap, deadline: float = 5.0, read_timeout: float = 6.0) -> None:
-        self.owners, self.deadline, self.read_timeout = owners, deadline, read_timeout
-        self._local = threading.local()
-        self.retries = 0
+    """Forwards each request to the owner of its logical shard.
 
-    @property
-    def http(self) -> requests.Session:
-        s: requests.Session | None = getattr(self._local, "s", None)
-        if s is None:
-            s = requests.Session()
-            s.trust_env = False
-            self._local.s = s
-        return s
+    Two things keep one bad shard from hurting the others. Connections to shards come from one
+    shared, bounded pool, so the gateways never hold more connections than a shard accepts. And
+    each owner gets a bulkhead: at most `per_owner` requests in flight to it. When a shard
+    freezes, its customers wait (or get a fast 503 once its bulkhead is full) while every other
+    shard's customers keep getting answers from the gateway's remaining threads.
+    """
+
+    def __init__(self, owners: OwnerMap, deadline: float = 5.0, read_timeout: float = 6.0,
+                 per_owner: int = 24) -> None:
+        self.owners, self.deadline, self.read_timeout, self.per_owner = owners, deadline, read_timeout, per_owner
+        self.http = requests.Session()  # urllib3's pool is thread-safe; no cookies are used
+        self.http.trust_env = False
+        adapter = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=per_owner)
+        self.http.mount("http://", adapter)
+        self._bulkheads: dict[str, threading.BoundedSemaphore] = {}
+        self._bulkhead_lock = threading.Lock()
+        self.retries = 0
+        self.shed = 0
+
+    def _bulkhead(self, url: str) -> threading.BoundedSemaphore:
+        with self._bulkhead_lock:
+            b = self._bulkheads.get(url)
+            if b is None:
+                b = self._bulkheads[url] = threading.BoundedSemaphore(self.per_owner)
+            return b
 
     def forward(self, shard: int, method: str, path: str, body: bytes, headers: dict[str, str]) -> Response:
         end = time.monotonic() + self.deadline
@@ -92,6 +107,10 @@ class Gateway:
             if url is None:
                 self._wait()
                 continue
+            bulkhead = self._bulkhead(url)
+            if not bulkhead.acquire(timeout=0.5):
+                self.shed += 1
+                return _json({"error": f"logical shard {shard} is not keeping up; try again"}, 503)
             try:
                 r = self.http.request(method, url + path, data=body, headers=headers,
                                       timeout=(0.5, self.read_timeout))
@@ -101,6 +120,8 @@ class Gateway:
                 last = f"{url}: {type(e).__name__}"  # dead or moved: find the new owner and send again
                 self._wait()
                 continue
+            finally:
+                bulkhead.release()
             if r.status_code == 421:
                 last = f"{url} no longer owns shard {shard}"
                 self._wait()
@@ -170,7 +191,7 @@ def create_app(gw: Gateway) -> Flask:
 
     @app.get("/health")
     def health() -> ResponseReturnValue:
-        return jsonify({"ok": True, "owners": len(gw.owners.owners), "retries": gw.retries})
+        return jsonify({"ok": True, "owners": len(gw.owners.owners), "retries": gw.retries, "shed": gw.shed})
 
     return app
 
@@ -185,7 +206,7 @@ def main(argv: list[str] | None = None) -> None:
     from waitress import serve
 
     log.info("gateway on :%d", args.port)
-    serve(create_app(gw), host="0.0.0.0", port=args.port, threads=64, ident=None)
+    serve(create_app(gw), host="0.0.0.0", port=args.port, threads=96, connection_limit=2000, ident=None)
 
 
 if __name__ == "__main__":

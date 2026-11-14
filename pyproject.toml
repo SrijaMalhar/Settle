@@ -42,7 +42,7 @@ markers = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-packages = ["settle", "sim"]
+packages = ["settle", "sim", "chaos"]
 
 [[tool.mypy.overrides]]
 module = ["waitress", "waitress.*", "locust", "locust.*"]

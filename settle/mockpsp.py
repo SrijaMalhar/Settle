@@ -10,6 +10,8 @@ API (what Settle's HttpPsp adapter speaks):
     GET  /upi/status/ID  -> {status: success|failure|pending, code}   404 if never received
     POST /upi/refund     {refund_id, attempt_id, amount} -> {status: confirmed|failed}  (deduplicated by refund_id)
 Callbacks: POST {callback_url}/psp/{name}/callback {attempt_id, status, code}, HMAC-signed.
+Test-only: GET /_ledger (the truth), GET /_received/ID, POST /_settle (replay final statuses as a
+settlement file would).
 """
 
 from __future__ import annotations
@@ -23,10 +25,12 @@ import os
 import random
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 import requests
+import requests.adapters
 from flask import Flask, jsonify, request
 from flask.typing import ResponseReturnValue
 
@@ -138,6 +142,10 @@ class MockPsp:
         self._lock = threading.Lock()
         self._due: list[_Due] = []
         self._wake = threading.Condition(self._lock)
+        self._http = requests.Session()  # one keep-alive pool for every callback
+        self._http.trust_env = False
+        self._http.mount("http://", requests.adapters.HTTPAdapter(pool_maxsize=32))
+        self._senders = ThreadPoolExecutor(32, thread_name_prefix="callback")
         self._sender = threading.Thread(target=self._send_callbacks, name="callbacks", daemon=True)
         self._sender.start()
 
@@ -193,8 +201,23 @@ class MockPsp:
             debited = {a: t.amount for a, t in self.txns.items() if t.answer(now)[0] == "success"}
             pending = sorted(a for a, t in self.txns.items() if t.answer(now)[0] == "pending")
             refunded = {r: {"attempt": a, "amount": amt} for r, (a, amt) in self.refunds.items()}
+            seen: dict[str, int] = {}
+            for a in self.requests:
+                seen[a] = seen.get(a, 0) + 1
             return {"psp": self.name, "requests": len(self.requests), "debited": debited,
-                    "refunded": refunded, "pending": pending}
+                    "refunded": refunded, "pending": pending,
+                    "failed": sorted(a for a, t in self.txns.items() if t.answer(now)[0] == "failure"),
+                    "repeated": {a: n for a, n in seen.items() if n > 1}}
+
+    def settle(self) -> int:
+        """A settlement file: send the final status of every decided payment again, as a callback.
+        Settle ignores the ones it already knows, and learns the ones whose callbacks were lost."""
+        now = time.time()
+        with self._lock:
+            done = [a for a, t in self.txns.items() if t.decision.first != "declined" and t.answer(now)[0] != "pending"]
+            for a in done:
+                self._schedule(now, a)
+        return len(done)
 
     # ------------------------------------------------------------------------------ callbacks
 
@@ -212,16 +235,14 @@ class MockPsp:
                 txn = self.txns[due.attempt_id]
             status, code = txn.answer(time.time())
             body = json.dumps({"attempt_id": txn.attempt_id, "status": status, "code": code}).encode()
-            threading.Thread(target=self._post, args=(body,), daemon=True).start()
+            self._senders.submit(self._post, body)
 
     def _post(self, body: bytes) -> None:
         url = f"{self.callback_url}/psp/{self.name}/callback"
         headers = {"Content-Type": "application/json", HEADER: sign(self.secret, body)}
-        http = requests.Session()
-        http.trust_env = False
         for attempt in range(4):  # real PSPs retry a callback that could not be delivered
             try:
-                r = http.post(url, data=body, headers=headers, timeout=3)
+                r = self._http.post(url, data=body, headers=headers, timeout=3)
                 if r.status_code < 500:
                     return
             except requests.RequestException:
@@ -253,6 +274,10 @@ def create_app(psp: MockPsp) -> Flask:
     def ledger() -> ResponseReturnValue:
         return jsonify(psp.ledger())
 
+    @app.post("/_settle")
+    def settle() -> ResponseReturnValue:
+        return jsonify({"resent": psp.settle()})
+
     @app.get("/_received/<attempt_id>")
     def received(attempt_id: str) -> ResponseReturnValue:
         with psp._lock:
@@ -279,7 +304,7 @@ def main(argv: list[str] | None = None) -> None:
     from waitress import serve
 
     log.info("mock PSP %s (%s) on :%d, callbacks to %s", args.name, args.profile, args.port, args.callback_url)
-    serve(create_app(psp), host="0.0.0.0", port=args.port, threads=64, ident=None)
+    serve(create_app(psp), host="0.0.0.0", port=args.port, threads=64, connection_limit=2000, ident=None)
 
 
 if __name__ == "__main__":

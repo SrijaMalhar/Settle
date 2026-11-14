@@ -1,0 +1,67 @@
+# Settle v4: two stateless gateways, three shard processes owning 12 logical shards, one standby,
+# PostgreSQL, Redis, three mock PSPs behind Toxiproxy, and Locust. 12 services.
+#
+#   docker compose up -d --build
+#   curl -X POST localhost:8000/orders/order-1/pay -H 'content-type: application/json' -d '{"amount": 49900}'
+#   python -m chaos.run_all          # the six chaos runs, with checks after each
+#
+# A killed shard comes back (restart: always) and waits on the locks as a standby.
+
+x-settle: &settle
+  image: settle:latest
+  build: .
+  environment: &env
+    SETTLE_DATABASE_URL: postgresql://settle:settle@postgres:5432/settle
+    SETTLE_REDIS_URL: redis://redis:6379/0
+    SETTLE_PSP_BASE: http://toxiproxy          # every PSP call goes through Toxiproxy
+    SETTLE_CALLBACK_URL: http://gateway:8000   # PSP callbacks come back through a gateway
+    SETTLE_HOLD_SECONDS: ${SETTLE_HOLD_SECONDS:-600}
+  depends_on:
+    postgres: {condition: service_healthy}
+    redis: {condition: service_started}
+    toxiproxy: {condition: service_started}
+  restart: always
+
+services:
+  postgres:
+    image: postgres:16
+    environment: {POSTGRES_PASSWORD: postgres}
+    # notice a vanished shard host in about 11 s, so its locks are freed for the standby
+    command: [postgres, -c, tcp_keepalives_idle=5, -c, tcp_keepalives_interval=2, -c, tcp_keepalives_count=3,
+              -c, max_connections=300]
+    volumes: [./deploy/initdb.sql:/docker-entrypoint-initdb.d/initdb.sql:ro]
+    healthcheck:
+      test: [CMD, pg_isready, -U, settle, -d, settle]
+      interval: 1s
+      retries: 30
+
+  redis:
+    image: redis:7
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: [-host=0.0.0.0, -config=/config/toxiproxy.json]
+    volumes: [./deploy/toxiproxy.json:/config/toxiproxy.json:ro]
+    ports: ["8474:8474"]                        # chaos runs change faults through this API
+
+  psp-axis:  {<<: *settle, command: python -m settle.mockpsp --name axis --profile fast}
+  psp-icici: {<<: *settle, command: python -m settle.mockpsp --name icici --profile slow}
+  psp-yes:   {<<: *settle, command: python -m settle.mockpsp --name yes --profile flaky}
+
+  shard-1: {<<: *settle, command: python -m settle.shard --logical 0-3}
+  shard-2: {<<: *settle, command: python -m settle.shard --logical 4-7}
+  shard-3: {<<: *settle, command: python -m settle.shard --logical 8-11}
+  standby: {<<: *settle, command: python -m settle.shard --logical 0-11 --standby}
+
+  gateway:
+    <<: *settle
+    command: python -m settle.gateway
+    deploy: {replicas: 2}
+    ports: ["8000-8001:8000"]
+
+  locust:
+    image: locustio/locust:2.32.4
+    command: -f /load/locustfile.py --host http://gateway:8000
+    volumes: [./loadtest:/load:ro]
+    ports: ["8089:8089"]
+    profiles: [load]

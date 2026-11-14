@@ -1,0 +1,66 @@
+# Run the same 12 services on a machine that cannot pull images:
+#
+#   deploy/local/build-image.sh
+#   VENV=/path/to/venv docker compose -f docker-compose.yml -f deploy/local/compose.local.yml up -d --no-build
+#
+# Every container uses the empty settle-local image, with the host's /usr, a virtualenv that has
+# Settle's dependencies, and this checkout mounted read-only. Same commands, same environment,
+# same network: only where the binaries come from differs.
+
+x-local: &local
+  image: settle-local
+  pull_policy: never
+  working_dir: /app
+  volumes:
+    - /usr:/usr:ro
+    - ${VENV:-./.venv}:/venv:ro
+    - ./:/app:ro
+  environment: &env
+    PATH: /venv/bin:/usr/local/bin:/usr/bin:/bin
+    PYTHONPATH: /app
+    PYTHONUNBUFFERED: "1"
+    SETTLE_DATABASE_URL: postgresql://settle:settle@postgres:5432/settle
+    SETTLE_REDIS_URL: redis://redis:6379/0
+    SETTLE_PSP_BASE: http://toxiproxy
+    SETTLE_CALLBACK_URL: http://gateway:8000
+    SETTLE_HOLD_SECONDS: ${SETTLE_HOLD_SECONDS:-600}
+
+services:
+  postgres:
+    <<: *local
+    entrypoint: [/app/deploy/local/postgres.sh]
+    environment: {PATH: /usr/sbin:/usr/bin:/sbin:/bin}
+    volumes:
+      - /usr:/usr:ro
+      - ./:/app:ro
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: [CMD, /usr/lib/postgresql/16/bin/pg_isready, -h, 127.0.0.1, -U, settle, -d, settle]
+      interval: 1s
+      retries: 60
+
+  redis:
+    <<: *local
+    command: [/usr/bin/redis-server, --protected-mode, "no", --save, "", --appendonly, "no"]
+
+  toxiproxy:
+    <<: *local
+    entrypoint: [/opt/bin/toxiproxy-server]
+    command: [-host=0.0.0.0, -config=/app/deploy/toxiproxy.json]
+
+  psp-axis: {<<: *local}
+  psp-icici: {<<: *local}
+  psp-yes: {<<: *local}
+  shard-1: {<<: *local}
+  shard-2: {<<: *local}
+  shard-3: {<<: *local}
+  standby: {<<: *local}
+  gateway: {<<: *local}
+
+  locust:
+    <<: *local
+    entrypoint: [/venv/bin/locust]
+    command: -f /app/loadtest/locustfile.py --host http://gateway:8000
+
+volumes:
+  pgdata:

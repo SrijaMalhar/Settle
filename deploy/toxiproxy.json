@@ -1,0 +1,5 @@
+[
+  {"name": "axis", "listen": "0.0.0.0:8101", "upstream": "psp-axis:9100", "enabled": true},
+  {"name": "icici", "listen": "0.0.0.0:8102", "upstream": "psp-icici:9100", "enabled": true},
+  {"name": "yes", "listen": "0.0.0.0:8103", "upstream": "psp-yes:9100", "enabled": true}
+]

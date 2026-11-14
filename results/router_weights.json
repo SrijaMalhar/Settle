@@ -1,0 +1,26 @@
+{
+  "w=1.0": {
+    "payments": 30000,
+    "went_pending": 2735,
+    "eventual_successes": 27652,
+    "completed_if_30pct_abandon_pending": 26889,
+    "checks_spent": 513,
+    "violations": 0
+  },
+  "w=0.5": {
+    "payments": 30000,
+    "went_pending": 555,
+    "eventual_successes": 27156,
+    "completed_if_30pct_abandon_pending": 26999,
+    "checks_spent": 433,
+    "violations": 0
+  },
+  "w=0.0": {
+    "payments": 30000,
+    "went_pending": 388,
+    "eventual_successes": 27062,
+    "completed_if_30pct_abandon_pending": 26954,
+    "checks_spent": 393,
+    "violations": 0
+  }
+}

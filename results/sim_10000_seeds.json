@@ -1,0 +1,15 @@
+{
+  "seeds": 10000,
+  "first_seed": 0,
+  "failing": 0,
+  "seconds": 79.2,
+  "totals": {
+    "orders": 400000,
+    "attempts": 438971,
+    "checks": 285378,
+    "crashes": 8804,
+    "went_to_ops": 17032,
+    "pinned_in_ops_by_a_contradiction": 293
+  },
+  "failures": []
+}

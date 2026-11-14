@@ -1,0 +1,6 @@
+{
+  "seeds": 300,
+  "same_hash_twice": 300,
+  "differ": [],
+  "distinct_hashes": 300
+}

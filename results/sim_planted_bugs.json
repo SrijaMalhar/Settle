@@ -1,0 +1,80 @@
+{
+  "timeout_is_failure": {
+    "expected": "I1, I5",
+    "caught": true,
+    "caught_by": {
+      "I1": 84,
+      "I5": 100,
+      "I6": 100
+    },
+    "first_seed": 0,
+    "example": "I5 at +22.8s: o0-0: 2 attempts the PSPs could still charge",
+    "seeds_run": 100
+  },
+  "resend_on_timeout": {
+    "expected": "I1",
+    "caught": true,
+    "caught_by": {
+      "I1": 100,
+      "I5": 100,
+      "I6": 5,
+      "I2": 2
+    },
+    "first_seed": 0,
+    "example": "I5 at +11.0s: o0-0: 2 attempts the PSPs could still charge",
+    "seeds_run": 100
+  },
+  "duplicate_twice": {
+    "expected": "I1, I4",
+    "caught": true,
+    "caught_by": {
+      "I4": 100
+    },
+    "first_seed": 0,
+    "example": "I4 at +68.9s: the engine raised payment PAID + refund_started",
+    "seeds_run": 100
+  },
+  "early_check": {
+    "expected": "I3",
+    "caught": true,
+    "caught_by": {
+      "I3": 100
+    },
+    "first_seed": 0,
+    "example": "I3 at +39.3s: p100000000001.1: first check 30 s after sending",
+    "seeds_run": 100
+  },
+  "no_refund_after_expiry": {
+    "expected": "I2",
+    "caught": true,
+    "caught_by": {
+      "I2": 99
+    },
+    "first_seed": 0,
+    "example": "I2 at +904.4s: o0-2: net charge 135027, expected 0 (not paid)",
+    "seeds_run": 100
+  },
+  "send_before_store": {
+    "expected": "I6",
+    "caught": true,
+    "caught_by": {
+      "I2": 88,
+      "I6": 88
+    },
+    "first_seed": 0,
+    "example": "I6 at +1003.5s: p060000000012.1: flaky took the money for an attempt Settle has no record of",
+    "seeds_run": 100
+  },
+  "no_live_check": {
+    "expected": "I5",
+    "caught": true,
+    "caught_by": {
+      "I1": 21,
+      "I4": 62,
+      "I5": 100
+    },
+    "first_seed": 0,
+    "example": "I5 at +20.4s: o0-1: 2 live attempts in Settle",
+    "seeds_run": 100
+  }
+}

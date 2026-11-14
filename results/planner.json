@@ -1,0 +1,56 @@
+{
+  "fast/fixed": {
+    "lost_callbacks": 2404,
+    "resolved_by_a_check": 2404,
+    "share_resolved_by_check": 1.0,
+    "sent_to_ops": 0,
+    "mean_time_to_certainty_s": 95.6,
+    "checks_spent": 2638,
+    "violations": 0
+  },
+  "fast/percentile": {
+    "lost_callbacks": 2427,
+    "resolved_by_a_check": 2427,
+    "share_resolved_by_check": 1.0,
+    "sent_to_ops": 0,
+    "mean_time_to_certainty_s": 94.1,
+    "checks_spent": 2681,
+    "violations": 0
+  },
+  "slow/fixed": {
+    "lost_callbacks": 2417,
+    "resolved_by_a_check": 1920,
+    "share_resolved_by_check": 0.794,
+    "sent_to_ops": 497,
+    "mean_time_to_certainty_s": 388.8,
+    "checks_spent": 16708,
+    "violations": 0
+  },
+  "slow/percentile": {
+    "lost_callbacks": 2477,
+    "resolved_by_a_check": 2191,
+    "share_resolved_by_check": 0.885,
+    "sent_to_ops": 286,
+    "mean_time_to_certainty_s": 419.1,
+    "checks_spent": 10463,
+    "violations": 0
+  },
+  "flaky/fixed": {
+    "lost_callbacks": 2499,
+    "resolved_by_a_check": 2465,
+    "share_resolved_by_check": 0.986,
+    "sent_to_ops": 34,
+    "mean_time_to_certainty_s": 155.8,
+    "checks_spent": 6270,
+    "violations": 0
+  },
+  "flaky/percentile": {
+    "lost_callbacks": 2533,
+    "resolved_by_a_check": 2498,
+    "share_resolved_by_check": 0.986,
+    "sent_to_ops": 35,
+    "mean_time_to_certainty_s": 152.8,
+    "checks_spent": 6858,
+    "violations": 0
+  }
+}

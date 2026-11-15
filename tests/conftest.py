@@ -27,7 +27,7 @@ def pg_dsn(postgres: Postgres) -> Iterator[str]:
     from settle.adapters.postgres_store import ensure_schema
 
     with psycopg.connect(postgres.dsn, autocommit=True) as c:
-        c.execute("DROP TABLE IF EXISTS events, orders, shard_owners")
+        c.execute("DROP TABLE IF EXISTS events, orders, shard_owners, inputs")
         ensure_schema(c)
     yield postgres.dsn
 

@@ -157,7 +157,8 @@ def test_a_refused_connection_sends_the_next_attempt_elsewhere() -> None:
 
 def test_a_lost_store_stops_the_process() -> None:
     class Broken(MemoryEventStore):
-        def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool) -> None:
+        def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool,
+                   cause: object = None) -> None:
             raise StoreFailed("connection lost")
 
     psps = {"axis": FakePsp("axis"), "icici": FakePsp("icici")}

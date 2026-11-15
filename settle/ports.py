@@ -8,7 +8,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from settle.core.messages import Event
+from settle.core.messages import Event, Input
 
 
 @dataclass(frozen=True)
@@ -37,9 +37,11 @@ class PspGateway(Protocol):  # one adapter per bank: Adapter pattern
 class EventStore(Protocol):  # Repository: PostgreSQL in production, a dict in tests
     def load(self, payment_id: str) -> list[Event]: ...
 
-    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool) -> None:
+    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool,
+               cause: Input | None = None) -> None:
         """All or nothing. `expected` is how many events the caller has already seen; if the
-        store holds a different number, someone else wrote, and the append fails."""
+        store holds a different number, someone else wrote, and the append fails. `cause` is the
+        input that produced these events, kept so histories can be re-run through new rules."""
         ...
 
     def open_payments(self, shard: int) -> list[str]: ...

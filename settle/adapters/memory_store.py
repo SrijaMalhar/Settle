@@ -4,7 +4,7 @@ sequence gap or overlap means a second writer."""
 from __future__ import annotations
 
 from settle.adapters.errors import Conflict
-from settle.core.messages import AttemptMoved, Event, PaymentCreated
+from settle.core.messages import AttemptMoved, Event, Input, PaymentCreated
 
 
 class MemoryEventStore:
@@ -13,12 +13,14 @@ class MemoryEventStore:
         self.orders: dict[str, str] = {}  # order id -> payment id
         self.shard: dict[str, int] = {}  # payment id -> logical shard
         self.open: dict[str, bool] = {}
+        self.inputs: dict[str, list[tuple[int, Input]]] = {}  # payment id -> (first seq, cause)
         self.appends = 0
 
     def load(self, payment_id: str) -> list[Event]:
         return list(self.events.get(payment_id, ()))
 
-    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool) -> None:
+    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool,
+               cause: Input | None = None) -> None:
         stored = self.events.get(payment_id, [])
         if len(stored) != expected:
             raise Conflict(f"{payment_id}: expected {expected} events, found {len(stored)}")
@@ -31,7 +33,15 @@ class MemoryEventStore:
             self.shard[payment_id] = c.shard
         self.events[payment_id] = stored + list(events)
         self.open[payment_id] = open
+        if cause is not None:
+            self.inputs.setdefault(payment_id, []).append((expected + 1, cause))
         self.appends += 1
+
+    def load_inputs(self, payment_id: str) -> list[Input]:
+        return [inp for _, inp in self.inputs.get(payment_id, ())]
+
+    def payment_ids(self) -> list[str]:
+        return sorted(self.events)
 
     def open_payments(self, shard: int) -> list[str]:
         return sorted(p for p, is_open in self.open.items() if is_open and self.shard.get(p) == shard)

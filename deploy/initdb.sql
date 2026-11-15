@@ -28,6 +28,17 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS orders_open ON orders (shard) WHERE open;
 
+-- The input behind each stored batch of events, so stored histories can be re-run through a
+-- changed decide() (python -m settle.replay) to see which payments would end differently.
+CREATE TABLE IF NOT EXISTS inputs (         -- the input behind each stored batch, for replay checks
+    payment_id  TEXT        NOT NULL,
+    step        INTEGER     NOT NULL,       -- seq of the first event the input produced
+    kind        TEXT        NOT NULL,       -- PayRequested, PspAnswer, TimerFired ...
+    data        JSONB       NOT NULL,
+    at          TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (payment_id, step)
+);
+
 -- Ownership is decided by pg_advisory_lock, not by this table. A process updates its row right
 -- after taking a shard's lock, so gateways learn about a new owner within a second.
 CREATE TABLE IF NOT EXISTS shard_owners (   -- where gateways send each logical shard's traffic

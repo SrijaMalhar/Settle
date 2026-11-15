@@ -23,7 +23,7 @@ from settle.adapters.memory_store import MemoryEventStore
 from settle.adapters.notifier import MerchantNotifier
 from settle.clock import FakeClock
 from settle.core.decide import Rejected, UnknownAttempt
-from settle.core.messages import CheckStatus, Event, Notify, SendRefund, SendToPsp
+from settle.core.messages import CheckStatus, Event, Input, Notify, SendRefund, SendToPsp
 from settle.core.model import IllegalMove, PaymentStatus
 from settle.mockpsp import Decision, Profile, draw
 from settle.policies.checks import CheckPlanner, FixedPlanner, PercentilePlanner
@@ -126,8 +126,9 @@ class TracingStore(MemoryEventStore):
         super().__init__()
         self.w = world
 
-    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool) -> None:
-        super().append(payment_id, events, expected=expected, open=open)
+    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool,
+               cause: Input | None = None) -> None:
+        super().append(payment_id, events, expected=expected, open=open, cause=cause)
         for i, e in enumerate(events):
             self.w.trace(f"{payment_id} {expected + i + 1} {e.kind} {json.dumps(e.data(), sort_keys=True)} {e.at:.6f}")
         self.w.checker.on_append(payment_id, events)

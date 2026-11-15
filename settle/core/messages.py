@@ -75,6 +75,28 @@ class Recover:
 
 Input = PayRequested | CancelRequested | PspAnswer | RefundAnswer | TimerFired | Recover
 
+INPUT_TYPES: dict[str, type[Input]] = {
+    cls.__name__: cls for cls in (PayRequested, CancelRequested, PspAnswer, RefundAnswer, TimerFired, Recover)
+}
+
+
+def _tuples(v: Any) -> Any:
+    return tuple(_tuples(x) for x in v) if isinstance(v, (list, tuple)) else v
+
+
+def _lists(v: Any) -> Any:
+    return [_lists(x) for x in v] if isinstance(v, (list, tuple)) else v
+
+
+def input_data(inp: Input) -> dict[str, Any]:
+    """An input as JSON, so the step that caused a batch of events can be stored with it."""
+    return {f.name: _lists(getattr(inp, f.name)) for f in dataclasses.fields(inp)}
+
+
+def input_from(kind: str, data: dict[str, Any]) -> Input:
+    cls = INPUT_TYPES[kind]
+    return cls(**{k: _tuples(v) for k, v in data.items()})
+
 # ---------------------------------------------------------------------------------------------
 # Events
 # ---------------------------------------------------------------------------------------------

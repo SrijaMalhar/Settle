@@ -14,7 +14,7 @@ import psycopg
 from psycopg.types.json import Jsonb
 
 from settle.adapters.errors import Conflict, StoreFailed
-from settle.core.messages import Event, PaymentCreated, event_from
+from settle.core.messages import Event, Input, PaymentCreated, event_from, input_data, input_from
 from settle.sharding import logical_shard, shard_of_payment
 
 SCHEMA = """
@@ -37,6 +37,15 @@ CREATE TABLE IF NOT EXISTS orders (
     open        BOOLEAN  NOT NULL           -- true until a final state; recovery reads only open ones
 );
 CREATE INDEX IF NOT EXISTS orders_open ON orders (shard) WHERE open;
+
+CREATE TABLE IF NOT EXISTS inputs (         -- the input behind each stored batch, for replay checks
+    payment_id  TEXT        NOT NULL,
+    step        INTEGER     NOT NULL,       -- seq of the first event the input produced
+    kind        TEXT        NOT NULL,       -- PayRequested, PspAnswer, TimerFired ...
+    data        JSONB       NOT NULL,
+    at          TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (payment_id, step)
+);
 
 CREATE TABLE IF NOT EXISTS shard_owners (   -- where gateways send each logical shard's traffic
     shard       SMALLINT    PRIMARY KEY,
@@ -77,7 +86,8 @@ class PostgresEventStore:
             raise StoreFailed(str(e)) from e
         return [event_from(kind, data, _float(at)) for kind, data, at in rows]
 
-    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool) -> None:
+    def append(self, payment_id: str, events: list[Event], *, expected: int, open: bool,
+               cause: Input | None = None) -> None:
         """All or nothing, in one transaction on the lock's connection."""
         shard = shard_of_payment(payment_id)
         conn = self.conn_for(shard)
@@ -93,6 +103,12 @@ class PostgresEventStore:
                         "VALUES (%s, %s, %s, %s, %s, to_timestamp(%s))",
                         rows,
                     )
+                    if cause is not None:
+                        cur.execute(
+                            "INSERT INTO inputs (payment_id, step, kind, data, at) "
+                            "VALUES (%s, %s, %s, %s, to_timestamp(%s))",
+                            (payment_id, expected + 1, type(cause).__name__, Jsonb(input_data(cause)), cause.now),
+                        )
                     if created is not None:
                         cur.execute(
                             "INSERT INTO orders (order_id, payment_id, shard, open) VALUES (%s, %s, %s, %s)",
@@ -105,6 +121,26 @@ class PostgresEventStore:
                         )
         except psycopg.errors.UniqueViolation as e:
             raise Conflict(f"{payment_id}: another writer got there first") from e
+        except psycopg.Error as e:
+            raise StoreFailed(str(e)) from e
+
+    def load_inputs(self, payment_id: str) -> list[Input]:
+        conn = self.conn_for(shard_of_payment(payment_id))
+        try:
+            rows = conn.execute("SELECT kind, data FROM inputs WHERE payment_id = %s ORDER BY step",
+                                (payment_id,)).fetchall()
+        except psycopg.Error as e:
+            raise StoreFailed(str(e)) from e
+        return [input_from(kind, data) for kind, data in rows]
+
+    def payment_ids(self, shard: int | None = None) -> list[str]:
+        conn = self.conn_for(shard if shard is not None else 0)
+        query = "SELECT payment_id FROM orders ORDER BY payment_id"
+        args: tuple[int, ...] = ()
+        if shard is not None:
+            query, args = "SELECT payment_id FROM orders WHERE shard = %s ORDER BY payment_id", (shard,)
+        try:
+            return [r[0] for r in conn.execute(query, args).fetchall()]
         except psycopg.Error as e:
             raise StoreFailed(str(e)) from e
 

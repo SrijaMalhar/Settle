@@ -12,3 +12,4 @@ dist/
 results/raw/
 *.log
 bin/
+results/ci/

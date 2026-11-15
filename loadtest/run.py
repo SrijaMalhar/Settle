@@ -54,10 +54,12 @@ def locust(gateways: list[str], users: int, seconds: int, prefix: Path) -> dict[
     )
     with open(f"{prefix}_stats.csv") as f:
         row = next(r for r in csv.DictReader(f) if r["Name"] == "POST /orders/[id]/pay")
+    requests_, failures = int(row["Request Count"]), int(row["Failure Count"])
     return {
-        "requests": int(row["Request Count"]),
-        "failures": int(row["Failure Count"]),
+        "requests": requests_,
+        "failures": failures,
         "payments_per_s": round(float(row["Requests/s"]), 1),
+        "completed_per_s": round((requests_ - failures) / seconds, 1),  # without the bulkheads' 503s
         "p50_ms": float(row["50%"]),
         "p95_ms": float(row["95%"]),
         "p99_ms": float(row["99%"]),
@@ -71,15 +73,25 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--seconds", type=int, default=60)
     ap.add_argument("--shards", default="1,2,3")
     ap.add_argument("--gateways", default="http://localhost:8000,http://localhost:8001")
+    ap.add_argument("--shard-cpus", type=float, help="cap each shard process at this many CPUs (docker cpus)")
     ap.add_argument("--json", type=Path, default=ROOT / "results" / "load.json")
     args = ap.parse_args(argv)
     base = args.files or ["docker-compose.yml"]
     gateways = args.gateways.split(",")
-    out: dict[str, Any] = {"users": args.users, "seconds": args.seconds, "cpus": os.cpu_count(), "layouts": {}}
+    out: dict[str, Any] = {"users": args.users, "seconds": args.seconds, "cpus": os.cpu_count(),
+                           "shard_cpus": args.shard_cpus, "layouts": {}}
     tmp = ROOT / "results" / "raw"
     tmp.mkdir(parents=True, exist_ok=True)
+    caps: list[str] = []
+    if args.shard_cpus:
+        # With every shard process held to the same CPU budget, the shards are the bottleneck in
+        # every layout, so the test measures how capacity grows with shards rather than how much
+        # CPU the machine has left over for them.
+        cap = tmp / "shard-cpus.yml"
+        cap.write_text("services:\n" + "".join(f"  shard-{i}: {{cpus: {args.shard_cpus}}}\n" for i in (1, 2, 3)))
+        caps = [str(cap)]
     for n in [int(x) for x in args.shards.split(",")]:
-        files = [*base, f"loadtest/shards-{n}.yml"]
+        files = [*base, f"loadtest/shards-{n}.yml", *caps]
         compose(files, "down", "-v", "--remove-orphans")
         compose(files, "up", "-d", "--no-build" if "deploy/local/compose.local.yml" in base else "--build")
         wait_ready(files, gateways[0])

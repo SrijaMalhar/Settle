@@ -1,0 +1,59 @@
+name: system
+
+# The whole deployment on a GitHub runner: build the real images, docker compose up, then the
+# smoke test, the six chaos runs, the Grafana dashboard, the replay check and the load tests.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  compose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      SETTLE_HOLD_SECONDS: "60"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          pip install -e ".[dev,load]" playwright
+          python -m playwright install --with-deps chromium
+      - name: Machine
+        run: |
+          echo "cpus: $(nproc)"; lscpu | grep 'Model name'; free -g | head -2; docker compose version
+      - name: docker compose up --build
+        run: docker compose up -d --build --wait --wait-timeout 300
+      - name: Smoke test
+        run: python scripts/smoke.py
+      - name: Six chaos runs
+        run: python -m chaos.run_all --json results/ci/chaos.json
+      - name: Grafana dashboard after the chaos runs
+        run: |
+          mkdir -p docs
+          python scripts/screenshot.py docs/grafana.png --minutes 15
+          echo "-----BEGIN GRAFANA PNG-----"; base64 -w 100 docs/grafana.png; echo "-----END GRAFANA PNG-----"
+      - name: Replay check over every stored history
+        run: docker compose exec -T shard-1 python -m settle.replay | tee results/ci/replay.json
+      - name: Load test, 1 to 3 shard processes
+        run: python -m loadtest.run --json results/ci/load.json
+      - name: Load test, each shard process held to 0.5 CPU
+        run: python -m loadtest.run --shard-cpus 0.5 --json results/ci/load-capped.json
+      - name: Results
+        if: always()
+        run: |
+          for f in results/ci/*.json; do echo "-----BEGIN $f-----"; cat "$f"; echo "-----END $f-----"; done
+      - name: Logs on failure
+        if: failure()
+        run: docker compose logs --tail 80
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: system-results
+          path: |
+            results/ci/
+            docs/grafana.png

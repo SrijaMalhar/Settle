@@ -43,3 +43,7 @@ jobs:
         run: python -m sim.run bugs --count 30
       - name: Compose file is valid
         run: docker compose config -q
+      - name: Prometheus config and alert rules (promtool)
+        run: |
+          docker run --rm -v "$PWD/deploy:/d" --entrypoint promtool prom/prometheus:v2.53.2 check config /d/prometheus.yml
+          docker run --rm -v "$PWD/deploy:/d" --entrypoint promtool prom/prometheus:v2.53.2 test rules /d/alerts_test.yml

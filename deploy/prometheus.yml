@@ -4,6 +4,8 @@ global:
   scrape_interval: 2s
   evaluation_interval: 5s
 
+rule_files: [alerts.yml]   # relative to this file
+
 scrape_configs:
   - job_name: shards
     dns_sd_configs:

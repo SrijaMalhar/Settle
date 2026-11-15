@@ -1,0 +1,41 @@
+# What should wake someone up, and what can wait for the morning.
+groups:
+  - name: settle
+    rules:
+      - alert: LogicalShardWithoutOwner
+        expr: sum(settle_owned_logical_shards) < 12
+        for: 15s
+        labels: {severity: page}
+        annotations:
+          summary: "{{ $value }} of 12 logical shards have an owner: the rest cannot take payments"
+          action: "Is the standby running? A takeover normally finishes in under a second."
+
+      - alert: PspBreakerOpen
+        expr: max by (psp) (settle_breaker_state) == 2
+        for: 2m
+        labels: {severity: ticket}
+        annotations:
+          summary: "The breaker for {{ $labels.psp }} has been open for 2 minutes"
+          action: "Traffic has moved to the other PSPs. Check the PSP's status page."
+
+      - alert: PaymentsWaitingForAPerson
+        expr: sum(settle_needs_ops_payments) > 0
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "{{ $value }} payments are waiting for a person"
+          action: "Match them against the PSPs' settlement files. RBI's T+1 reversal clock is running."
+
+      - alert: ManyPaymentsLeftPending
+        expr: sum(rate(settle_attempts_went_pending_total[5m])) / sum(rate(settle_attempts_total[5m])) > 0.10
+        for: 5m
+        labels: {severity: ticket}
+        annotations:
+          summary: "More than 10% of payments leave the customer at pending"
+
+      - alert: GatewaySheddingLoad
+        expr: sum(rate(settle_gateway_shed_total[5m])) > 1
+        for: 2m
+        labels: {severity: page}
+        annotations:
+          summary: "Gateways are refusing payments because a shard cannot keep up"

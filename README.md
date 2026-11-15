@@ -9,7 +9,7 @@ It runs as stateless gateways in front of shard processes, each with a single wr
 | | |
 |---|---|
 | Stack | Python 3.12, Flask, PostgreSQL 16, Redis, Docker Compose, Toxiproxy, Prometheus, Grafana, Locust, pytest, Hypothesis, mypy (strict) |
-| Tests | 112, against a real PostgreSQL, Redis and Toxiproxy, plus real process kills |
+| Tests | 113, against a real PostgreSQL, Redis and Toxiproxy, plus real process kills; alert rules unit-tested with `promtool` |
 | Every push | GitHub Actions builds the images, runs `docker compose up`, a smoke test, the six chaos runs, the replay check and the load tests ([latest run](https://github.com/SrijaMalhar/Settle/actions/runs/43675627388)) |
 | Simulator | 10,000 seeds, 400,000 orders, 8,804 injected crashes: **0 invariant violations** |
 | Failover | standby takes over **2.2 ms** after `SIGKILL` (process level); serving the dead shard's traffic **0.33 s** after `docker kill` |
@@ -189,6 +189,8 @@ The screenshot was taken by the CI run straight after the six chaos runs, so it 
 
 ![Grafana dashboard after the six chaos runs](docs/grafana.png)
 
+Prometheus also carries [alert rules](deploy/alerts.yml), unit-tested with `promtool` in CI: a logical shard without an owner for 15 seconds pages someone (with no standby, it fired 21 seconds after a shard was killed; with the standby running it never fires, because the takeover finishes in under a second); a breaker open for two minutes, payments waiting for a person, too many payments left at pending, and gateways shedding load raise tickets.
+
 | Metric | What it shows |
 |---|---|
 | `settle_attempts_total{psp}` | Where the router sends new attempts |
@@ -350,9 +352,10 @@ python -m sim.run planner --count 4
 
 ```bash
 docker compose up -d --build
-curl -X POST localhost:8000/orders/order-1/pay -H 'content-type: application/json' -d '{"amount": 49900}'
-curl localhost:8001/orders/order-1                      # any gateway answers for any order
-curl localhost:8000/stats                               # PSP scores, breakers, check plans, ops queue
+KEY='authorization: Bearer dev-merchant-key'            # set SETTLE_MERCHANT_KEY to change it
+curl -X POST localhost:8000/orders/order-1/pay -H "$KEY" -H 'content-type: application/json' -d '{"amount": 49900}'
+curl -H "$KEY" localhost:8001/orders/order-1            # any gateway answers for any order
+curl -H "$KEY" localhost:8000/stats                     # PSP scores, breakers, check plans, ops queue
 
 open http://localhost:3000                              # Grafana, already on the Settle dashboard
 open http://localhost:9090                              # Prometheus
@@ -369,12 +372,15 @@ The [`system` workflow](.github/workflows/system.yml) runs exactly this on every
 
 ### API
 
+Merchant calls (`/orders/...` and `/stats`) need `Authorization: Bearer <key>`, checked at the gateway against `SETTLE_MERCHANT_KEYS`. PSP callbacks need no key: the shard verifies their HMAC signature instead, which proves the PSP sent them.
+
 | Method | Path | Called by | What it does |
 |---|---|---|---|
 | `POST` | `/orders/{order_id}/pay` | Merchant | First call creates the payment and starts an attempt on the best PSP (`202`). Later calls start a new attempt only if every earlier one definitely failed; otherwise `409` with the next status-check time. If already paid, returns the payment unchanged (`200`). |
 | `POST` | `/orders/{order_id}/cancel` | Merchant | Gives up the order. A success that arrives later is refunded. |
 | `GET` | `/orders/{order_id}` | Merchant | Status, attempts, and when the next status check is due |
 | `POST` | `/psp/{psp}/callback` | PSP | Delivers a result for an attempt (HMAC-signed). Repeats change nothing. |
+| `GET` | `/metrics` | Prometheus | Counters, gauges and histograms for this process |
 | `GET` | `/stats` | Ops | Score and breaker per PSP, check plans, payments waiting for a person |
 
 ## Code layout
@@ -400,7 +406,7 @@ sim/               the simulator: world, PSP profiles, invariants, experiments
 chaos/             the six chaos runs and the checks over a live system
 loadtest/          the Locust file and the 1/2/3-shard runner
 tests/             unit, Hypothesis, PostgreSQL, Redis, Toxiproxy, failover, API, simulator
-deploy/            initdb.sql, toxiproxy.json, prometheus.yml, grafana/ (dashboard), local/ (offline image)
+deploy/            initdb.sql, toxiproxy.json, prometheus.yml, alerts.yml (+ tests), grafana/ (dashboard), local/ (offline image)
 scripts/           demo, smoke test, dashboard screenshot
 .github/workflows/ ci (types, tests, simulator) and system (compose up, chaos, replay, load)
 ```

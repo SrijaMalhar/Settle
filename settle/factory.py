@@ -10,6 +10,7 @@ from settle.adapters.notifier import MerchantNotifier, StatsCollector
 from settle.adapters.redis_health import RedisHealth
 from settle.clock import SystemClock
 from settle.config import Settings
+from settle.metrics import ShardMetrics
 from settle.policies.checks import CheckPlanner, FixedPlanner, PercentilePlanner
 from settle.policies.routing import CleanSuccessRouter, FixedOrderRouter, Router
 from settle.ports import Clock, EventStore, HealthStore, PspGateway
@@ -50,6 +51,7 @@ def build_engine(
     clock: Clock | None = None,
     owned: Iterable[int] | None = None,
     psps: dict[str, PspGateway] | None = None,
+    metrics: ShardMetrics | None = None,
 ) -> tuple[PaymentEngine, ThreadDispatcher, StatsCollector]:
     health = build_health(settings)
     stats = StatsCollector()
@@ -63,7 +65,7 @@ def build_engine(
         clock=clock or SystemClock(),
         dispatcher=dispatcher,
         notifier=MerchantNotifier(settings.merchant_webhook),
-        subscribers=[stats],
+        subscribers=[stats] if metrics is None else [stats, metrics],
         owned=owned,
         hold_seconds=settings.hold_seconds,
     )

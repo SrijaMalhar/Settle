@@ -6,13 +6,15 @@ from collections.abc import Callable
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import Any
 
-from flask import Flask, jsonify, request
+from flask import Flask, Response, jsonify, request
 from flask.typing import ResponseReturnValue
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from settle.adapters.errors import StoreFailed
 from settle.core.decide import Rejected, UnknownAttempt
 from settle.core.model import Payment
 from settle.core.money import Money
+from settle.metrics import ShardMetrics
 from settle.shard.engine import NotOwner, PaymentEngine, ShardEngine
 from settle.sharding import ORDER_ID
 from settle.signing import HEADER, verify
@@ -48,7 +50,8 @@ def view(p: Payment) -> dict[str, Any]:
 
 
 def create_app(shard: ShardEngine, *, secret: str, timeout: float = 5.0,
-               extra_stats: Callable[[], dict[str, Any]] | None = None) -> Flask:
+               extra_stats: Callable[[], dict[str, Any]] | None = None,
+               metrics: ShardMetrics | None = None) -> Flask:
     app = Flask("settle-shard")
 
     def ask(fn: Callable[[PaymentEngine], Any]) -> Any:
@@ -132,5 +135,11 @@ def create_app(shard: ShardEngine, *, secret: str, timeout: float = 5.0,
     @app.get("/health")
     def health() -> ResponseReturnValue:
         return jsonify({"ok": True, "processed": shard.processed})
+
+    @app.get("/metrics")
+    def prometheus() -> ResponseReturnValue:
+        if metrics is None:
+            return "no metrics\n", 404
+        return Response(metrics.expose(), mimetype=CONTENT_TYPE_LATEST)
 
     return app

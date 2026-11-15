@@ -16,6 +16,7 @@ import sys
 from settle.adapters.postgres_store import PostgresEventStore, ensure_schema
 from settle.config import Settings
 from settle.factory import build_engine
+from settle.metrics import ShardMetrics
 from settle.shard.engine import PaymentEngine, ShardEngine
 from settle.shard.ownership import ShardOwnership, connect
 from settle.shard.server import create_app
@@ -42,7 +43,8 @@ def main(argv: list[str] | None = None) -> None:
     ownership = ShardOwnership(settings.database_url, shards, name=args.name,
                                delay=settings.standby_delay if args.standby else 0.0)
     store = PostgresEventStore(ownership.conn)
-    engine, dispatcher, stats = build_engine(settings, store=store, owned=[])
+    metrics = ShardMetrics()
+    engine, dispatcher, stats = build_engine(settings, store=store, owned=[], metrics=metrics)
     engine.warm_planner(history)
 
     def die(e: BaseException) -> None:
@@ -50,7 +52,7 @@ def main(argv: list[str] | None = None) -> None:
         logging.shutdown()
         os._exit(1)
 
-    shard = ShardEngine(engine, on_fatal=die, heartbeat=ownership.heartbeat)
+    shard = ShardEngine(engine, on_fatal=die, heartbeat=ownership.heartbeat, metrics=metrics)
     dispatcher.bind(shard)
 
     def acquired(k: int) -> None:
@@ -68,7 +70,7 @@ def main(argv: list[str] | None = None) -> None:
 
     from waitress import serve
 
-    app = create_app(shard, secret=settings.psp_secret,
+    app = create_app(shard, secret=settings.psp_secret, metrics=metrics,
                      extra_stats=lambda: {"name": args.name, "url": url, "stats": stats.snapshot()})
     try:
         serve(app, host="0.0.0.0", port=settings.port, threads=48, connection_limit=2000, ident=None)

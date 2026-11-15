@@ -18,10 +18,12 @@ from typing import Any
 import psycopg
 import requests
 import requests.adapters
-from flask import Flask, Response, jsonify, request
+from flask import Flask, Response, g, jsonify, request
 from flask.typing import ResponseReturnValue
+from prometheus_client import CONTENT_TYPE_LATEST
 
 from settle import LOGICAL_SHARDS
+from settle.metrics import GatewayMetrics
 from settle.sharding import ORDER_ID, logical_shard, payment_of_attempt, shard_of_payment
 
 log = logging.getLogger("settle.gateway")
@@ -81,8 +83,9 @@ class Gateway:
     """
 
     def __init__(self, owners: OwnerMap, deadline: float = 5.0, read_timeout: float = 6.0,
-                 per_owner: int = 24) -> None:
+                 per_owner: int = 24, metrics: GatewayMetrics | None = None) -> None:
         self.owners, self.deadline, self.read_timeout, self.per_owner = owners, deadline, read_timeout, per_owner
+        self.metrics = metrics or GatewayMetrics()
         self.http = requests.Session()  # urllib3's pool is thread-safe; no cookies are used
         self.http.trust_env = False
         adapter = requests.adapters.HTTPAdapter(pool_connections=16, pool_maxsize=per_owner)
@@ -110,6 +113,7 @@ class Gateway:
             bulkhead = self._bulkhead(url)
             if not bulkhead.acquire(timeout=0.5):
                 self.shed += 1
+                self.metrics.shed.inc()
                 return _json({"error": f"logical shard {shard} is not keeping up; try again"}, 503)
             try:
                 r = self.http.request(method, url + path, data=body, headers=headers,
@@ -135,6 +139,7 @@ class Gateway:
 
     def _wait(self) -> None:
         self.retries += 1
+        self.metrics.retries.inc()
         self.owners.refresh()
         time.sleep(0.1)
 
@@ -157,8 +162,31 @@ def _json(body: dict[str, Any], status: int) -> Response:
     return r
 
 
+def _route() -> str:
+    path = request.path
+    if path.startswith("/psp/"):
+        return "callback"
+    if path.endswith("/pay"):
+        return "pay"
+    if path.endswith("/cancel"):
+        return "cancel"
+    return "get" if path.startswith("/orders/") else path.strip("/") or "root"
+
+
 def create_app(gw: Gateway) -> Flask:
     app = Flask("settle-gateway")
+
+    @app.before_request
+    def start_timer() -> None:
+        g.started = time.perf_counter()
+
+    @app.after_request
+    def count(response: Response) -> Response:
+        route = _route()
+        if route != "metrics":
+            gw.metrics.requests.labels(route, str(response.status_code)).inc()
+            gw.metrics.seconds.labels(route).observe(time.perf_counter() - g.started)
+        return response
 
     def pass_on(shard: int) -> Response:
         headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_HEADERS | {"host"}}
@@ -192,6 +220,11 @@ def create_app(gw: Gateway) -> Flask:
     @app.get("/health")
     def health() -> ResponseReturnValue:
         return jsonify({"ok": True, "owners": len(gw.owners.owners), "retries": gw.retries, "shed": gw.shed})
+
+    @app.get("/metrics")
+    def prometheus() -> ResponseReturnValue:
+        gw.metrics.owners.set(len(gw.owners.owners))
+        return Response(gw.metrics.expose(), mimetype=CONTENT_TYPE_LATEST)
 
     return app
 

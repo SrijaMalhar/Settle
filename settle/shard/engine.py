@@ -17,7 +17,7 @@ import uuid
 from collections.abc import Callable, Iterable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import Any, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Protocol, TypeVar
 
 from settle.adapters.errors import StoreFailed
 from settle.adapters.notifier import MerchantNotifier
@@ -46,6 +46,9 @@ from settle.ports import Clock, EventStore, HealthStore, PspGateway, PspReply, S
 from settle.shard.feeds import HealthFeed, PlannerFeed
 from settle.shard.timers import TimerQueue
 from settle.sharding import logical_shard, payment_of_attempt, shard_of_payment
+
+if TYPE_CHECKING:
+    from settle.metrics import ShardMetrics
 
 log = logging.getLogger("settle.engine")
 
@@ -231,7 +234,7 @@ class PaymentEngine:
                 self.crash_point("after_send")
         if events:
             # Write before you act: all of them or none, through the shard lock's connection.
-            self.store.append(pid, events, expected=seq, open=not after.final)
+            self.store.append(pid, events, expected=seq, open=not after.final, cause=inp)
             seq += len(events)
             self._remember(after, seq)
             for e in events:
@@ -338,8 +341,10 @@ class ShardEngine:
     back through Futures. No locks in application code: the only shared object is the queue."""
 
     def __init__(self, engine: PaymentEngine, *, on_fatal: Callable[[BaseException], None],
-                 heartbeat: Callable[[], None] | None = None, heartbeat_every: float = 1.0) -> None:
+                 heartbeat: Callable[[], None] | None = None, heartbeat_every: float = 1.0,
+                 metrics: ShardMetrics | None = None) -> None:
         self.engine = engine
+        self.metrics = metrics
         self.inbox: queue.Queue[tuple[Callable[[PaymentEngine], Any], Future[Any] | None]] = queue.Queue()
         self.on_fatal = on_fatal
         self.heartbeat, self.heartbeat_every = heartbeat, heartbeat_every
@@ -367,6 +372,7 @@ class ShardEngine:
 
     def _run(self) -> None:  # the only code that touches payment state
         next_beat = time.monotonic() + self.heartbeat_every
+        next_gauges = time.monotonic()
         while not self._stopping.is_set():
             due = self.engine.timers.next_due()
             wait = 0.5 if due is None else min(max(due - self.engine.clock.now(), 0.0), 0.5)
@@ -381,12 +387,16 @@ class ShardEngine:
                 if self.heartbeat and time.monotonic() >= next_beat:
                     self.heartbeat()  # a lost lock connection must stop this process even when idle
                     next_beat = time.monotonic() + self.heartbeat_every
+                if self.metrics and time.monotonic() >= next_gauges:
+                    self.metrics.refresh(self.engine, self.inbox.qsize())  # only the writer reads state
+                    next_gauges = time.monotonic() + 1.0
             except BaseException as e:  # crash-only: the store or the lock is gone
                 self.on_fatal(e)
                 return
 
     def _handle(self, fn: Callable[[PaymentEngine], Any], reply: Future[Any] | None) -> None:
         self.processed += 1
+        started = time.perf_counter()
         try:
             result = fn(self.engine)
         except (Rejected, UnknownAttempt, NotOwner) as e:
@@ -402,6 +412,8 @@ class ShardEngine:
             if reply is not None:
                 reply.set_exception(e)
             raise
+        if self.metrics:
+            self.metrics.step.observe(time.perf_counter() - started)
         if reply is not None:
             reply.set_result(result)
 

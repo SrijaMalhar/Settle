@@ -328,7 +328,7 @@ settle/
 sim/              deterministic simulator, invariants, experiments
 chaos/            fault scenarios and live invariant checks
 loadtest/         Locust scenarios and shard-layout runner
-tests/            113 tests
+tests/            116 tests
 deploy/           schema, Prometheus, alert rules and tests, Grafana, Toxiproxy
 scripts/          demo, smoke test, dashboard screenshot, demo GIF
 ```

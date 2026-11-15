@@ -54,9 +54,13 @@ class Ledgers:
         return cls(debited, refunded, received, pending, repeated)
 
 
-def check(rows: list[tuple[str, int, str, dict[str, Any], float]], ledgers: Ledgers, final: bool = False) -> Report:
-    """rows: (payment_id, seq, kind, data, at) in order. With final=True the system is quiet and
-    the settlement replay has run, so I2 is checked too."""
+def check(rows: list[tuple[str, int, str, dict[str, Any], float]], ledgers: Ledgers, final: bool = False,
+          before: Ledgers | None = None) -> Report:
+    """rows: (payment_id, seq, kind, data, at) in order. ledgers: read after rows. With final=True
+    the system is quiet and the settlement replay has run, so I2 is checked too.
+
+    Under load, pass before: the ledgers read just before rows. A debit only proves an attempt was
+    stored if the PSP had it before the events were read; one taken in between was stored after."""
     rep = Report()
     by_payment: dict[str, list[Event]] = {}
     for pid, _seq, kind, data, at in rows:
@@ -70,7 +74,7 @@ def check(rows: list[tuple[str, int, str, dict[str, Any], float]], ledgers: Ledg
         rep.status[p.status.value] = rep.status.get(p.status.value, 0) + 1
         known |= {a.id for a in p.attempts}
         _money(p, events, ledgers, rep, final)
-    for attempt in ledgers.debited:  # I6: no debit Settle has no record of
+    for attempt in (before or ledgers).debited:  # I6: no debit Settle has no record of
         if attempt not in known:
             rep.fail("I6", f"{attempt}: a PSP took money for an attempt Settle never stored")
     for attempt, n in ledgers.repeated.items():  # ask, never resend

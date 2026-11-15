@@ -79,6 +79,14 @@ class Stack:
     def ledgers(self) -> Ledgers:
         return Ledgers.merge([self.psp(n, "GET", "/_ledger") for n in PSPS])
 
+    def check(self, final: bool = False) -> Report:
+        """The ledgers are read on both sides of the events, so a check under load compares like
+        with like: Settle stores an attempt before sending it, and the PSP takes money before
+        Settle can hear it succeeded."""
+        before = self.ledgers()
+        rows = self.events()
+        return check(rows, self.ledgers(), final=final, before=before)
+
     def toxic(self, proxy: str, kind: str, **attrs: Any) -> None:
         self.http.post(f"{self.toxiproxy}/proxies/{proxy}/toxics",
                        json={"type": kind, "stream": "downstream", "attributes": attrs}).raise_for_status()
@@ -358,7 +366,7 @@ def main(argv: list[str] | None = None) -> None:
         out = run(st, load, args.duration)
         unknown += out.pop("_unknown", [])
         time.sleep(5)
-        out["checks"] = summary(check(st.events(), st.ledgers()))
+        out["checks"] = summary(st.check())
         results["runs"][name] = out
         print(json.dumps(out, indent=2), flush=True)
     load.stop()
@@ -368,14 +376,14 @@ def main(argv: list[str] | None = None) -> None:
         st.psp(psp, "POST", "/_settle")
     deadline = time.time() + 900
     while time.time() < deadline:
-        rep = check(st.events(), st.ledgers())
+        rep = st.check()
         if not ({"AWAITING", "EXPIRED", "REFUNDING"} & set(rep.status)):
             break
         time.sleep(10)
     for psp in PSPS:
         st.psp(psp, "POST", "/_settle")
     time.sleep(10)
-    final = check(st.events(), st.ledgers(), final=True)
+    final = st.check(final=True)
     rows = st.events()
     resolved = {d["attempt"] for _p, _s, k, d, _a in rows if k == "AttemptMoved" and d["to"] in ("succeeded", "failed")}
     results["unknown_attempts_resolved"] = f"{sum(a in resolved for a in unknown)} of {len(unknown)}"

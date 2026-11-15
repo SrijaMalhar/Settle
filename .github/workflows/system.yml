@@ -6,6 +6,7 @@ name: system
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md", "docs/**", "results/**"]
   workflow_dispatch:
 
 jobs:

@@ -5,28 +5,28 @@
     "A PSP turns slow": {
       "psp": "axis",
       "attempts_per_psp_before": {
-        "axis": 247,
-        "icici": 36,
-        "yes": 24
+        "axis": 219,
+        "icici": 64,
+        "yes": 23
       },
       "attempts_per_psp_second_half": {
         "axis": 0,
-        "icici": 224,
-        "yes": 76
+        "icici": 263,
+        "yes": 37
       },
-      "attempts_that_timed_out": 64,
+      "attempts_that_timed_out": 92,
       "load": {
         "requests": 600,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 6.7,
-        "p95_ms": 11.4
+        "p50_ms": 7.2,
+        "p95_ms": 8.8
       },
       "checks": {
-        "payments": 1071,
+        "payments": 1076,
         "status": {
-          "PAID": 540,
-          "AWAITING": 531
+          "AWAITING": 549,
+          "PAID": 527
         },
         "violations": []
       }
@@ -34,92 +34,92 @@
     "A PSP goes down": {
       "psp": "icici",
       "breaker_open_on_every_shard_after_s": 0.03,
-      "refused_attempts": 0,
+      "refused_attempts": 1,
       "attempts_to_it_after_breaker_opened": 0,
       "attempts_per_psp_during": {
-        "axis": 361,
-        "icici": 0,
-        "yes": 239
+        "axis": 235,
+        "icici": 1,
+        "yes": 365
       },
       "load": {
         "requests": 600,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 7.0,
-        "p95_ms": 12.0
+        "p50_ms": 7.1,
+        "p95_ms": 9.1
       },
       "checks": {
-        "payments": 1871,
+        "payments": 1893,
         "status": {
-          "PAID": 1361,
-          "AWAITING": 495,
-          "CLOSED": 7,
-          "EXPIRED": 8
+          "PAID": 1351,
+          "CLOSED": 4,
+          "AWAITING": 527,
+          "EXPIRED": 11
         },
         "violations": []
       }
     },
     "Resets mid-request": {
       "psp": "axis",
-      "attempts_reset": 28,
+      "attempts_reset": 38,
       "load": {
-        "requests": 600,
-        "ok_per_s": 30.0,
+        "requests": 601,
+        "ok_per_s": 30.1,
         "errors": 0,
-        "p50_ms": 7.5,
-        "p95_ms": 11.7
+        "p50_ms": 7.4,
+        "p95_ms": 9.3
       },
       "checks": {
-        "payments": 2670,
+        "payments": 2714,
         "status": {
-          "PAID": 1778,
-          "EXPIRED": 66,
-          "AWAITING": 735,
-          "CLOSED": 82,
-          "REFUNDED": 9
+          "PAID": 1800,
+          "AWAITING": 765,
+          "CLOSED": 67,
+          "REFUNDED": 13,
+          "EXPIRED": 69
         },
         "violations": []
       }
     },
     "Kill a shard under load": {
-      "standby_serving_shards_4_to_7_after_s": 0.308,
+      "standby_serving_shards_4_to_7_after_s": 0.329,
       "throughput_5s_before": {
         "requests": 150,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 7.9,
-        "p95_ms": 14.7
+        "p50_ms": 7.6,
+        "p95_ms": 18.4
       },
       "throughput_first_5s_after": {
         "requests": 150,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 8.4,
-        "p95_ms": 19.6
+        "p50_ms": 7.7,
+        "p95_ms": 18.4
       },
       "throughput_5s_to_15s_after": {
         "requests": 300,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 7.6,
-        "p95_ms": 13.9
+        "p50_ms": 7.7,
+        "p95_ms": 9.7
       },
       "shards_4_to_7_first_5s_after": {
-        "requests": 44,
-        "ok_per_s": 8.8,
+        "requests": 56,
+        "ok_per_s": 11.2,
         "errors": 0,
-        "p50_ms": 8.6,
-        "p95_ms": 20.8
+        "p50_ms": 7.9,
+        "p95_ms": 611.4
       },
       "docker_restarted_it": false,
       "checks": {
-        "payments": 3478,
+        "payments": 3535,
         "status": {
-          "PAID": 2622,
-          "REFUNDED": 62,
-          "AWAITING": 545,
-          "EXPIRED": 70,
-          "CLOSED": 179
+          "PAID": 2358,
+          "AWAITING": 856,
+          "CLOSED": 168,
+          "REFUNDED": 59,
+          "EXPIRED": 94
         },
         "violations": []
       }
@@ -127,34 +127,34 @@
     "Freeze a shard": {
       "owner_of_shards_0_to_3_unchanged": true,
       "shards_0_to_3_during_pause": {
-        "requests": 88,
-        "ok_per_s": 0.9,
-        "errors": 79,
-        "p50_ms": 4194.4,
-        "p95_ms": 4632.9
+        "requests": 96,
+        "ok_per_s": 2.6,
+        "errors": 70,
+        "p50_ms": 3360.2,
+        "p95_ms": 4888.8
       },
       "other_shards_during_pause": {
-        "requests": 212,
-        "ok_per_s": 21.2,
+        "requests": 204,
+        "ok_per_s": 20.4,
         "errors": 0,
-        "p50_ms": 8.5,
-        "p95_ms": 14.0
+        "p50_ms": 7.3,
+        "p95_ms": 9.3
       },
       "shards_0_to_3_after": {
-        "requests": 80,
-        "ok_per_s": 10.0,
+        "requests": 71,
+        "ok_per_s": 8.9,
         "errors": 0,
-        "p50_ms": 8.7,
-        "p95_ms": 12.9
+        "p50_ms": 7.7,
+        "p95_ms": 9.1
       },
       "checks": {
-        "payments": 4215,
+        "payments": 4303,
         "status": {
-          "PAID": 3416,
-          "AWAITING": 336,
-          "REFUNDED": 127,
-          "CLOSED": 253,
-          "EXPIRED": 83
+          "PAID": 2948,
+          "EXPIRED": 95,
+          "CLOSED": 230,
+          "AWAITING": 891,
+          "REFUNDED": 139
         },
         "violations": []
       }
@@ -164,35 +164,38 @@
         "requests": 570,
         "ok_per_s": 30.0,
         "errors": 0,
-        "p50_ms": 7.8,
-        "p95_ms": 12.6
+        "p50_ms": 6.4,
+        "p95_ms": 9.9
       },
       "checks": {
-        "payments": 5030,
+        "payments": 5131,
         "status": {
-          "PAID": 4180,
-          "AWAITING": 261,
-          "REFUNDED": 192,
-          "CLOSED": 323,
-          "EXPIRED": 74
+          "PAID": 3858,
+          "REFUNDED": 218,
+          "CLOSED": 308,
+          "AWAITING": 611,
+          "EXPIRED": 136
         },
         "violations": []
       }
     }
   },
-  "unknown_attempts_resolved": "92 of 92",
+  "unknown_attempts_resolved": "130 of 130",
   "final": {
-    "payments": 5071,
+    "payments": 5195,
     "status": {
-      "PAID": 4337,
-      "CLOSED": 458,
-      "REFUNDED": 276
+      "PAID": 4221,
+      "REFUNDED": 476,
+      "CLOSED": 497,
+      "NEEDS_OPS": 1
     },
     "violations": [],
-    "waiting_for_a_person": []
+    "waiting_for_a_person": [
+      "c-902ea95e01d0 (unresolved)"
+    ]
   },
   "load_total": {
-    "requests": 5135,
-    "errors": 83
+    "requests": 5235,
+    "errors": 72
   }
 }

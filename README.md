@@ -8,12 +8,14 @@ It runs as stateless gateways in front of shard processes, each with a single wr
 
 | | |
 |---|---|
-| Stack | Python 3.12, Flask, PostgreSQL 16, Redis, Docker Compose, Toxiproxy, Locust, pytest, Hypothesis, mypy (strict) |
-| Tests | 103, against a real PostgreSQL, Redis and Toxiproxy, plus real process kills |
+| Stack | Python 3.12, Flask, PostgreSQL 16, Redis, Docker Compose, Toxiproxy, Prometheus, Grafana, Locust, pytest, Hypothesis, mypy (strict) |
+| Tests | 112, against a real PostgreSQL, Redis and Toxiproxy, plus real process kills |
+| Every push | GitHub Actions builds the images, runs `docker compose up`, a smoke test, the six chaos runs, the replay check and the load tests ([latest run](https://github.com/SrijaMalhar/Settle/actions/runs/43675627388)) |
 | Simulator | 10,000 seeds, 400,000 orders, 8,804 injected crashes: **0 invariant violations** |
-| Failover | standby takes over **2.2 ms** after `SIGKILL` (process level); serving the dead shard's traffic **0.31 s** after `docker kill` |
-| Chaos | six runs in Docker under load: **0 invariant violations**; merchant errors only for the frozen shard's own customers |
-| Load | 130 / 160 / 189 payments per second at 1 / 2 / 3 shard processes (2 vCPUs, everything on one host) |
+| Failover | standby takes over **2.2 ms** after `SIGKILL` (process level); serving the dead shard's traffic **0.33 s** after `docker kill` |
+| Chaos | six runs on the official images under load: **0 invariant violations**; merchant errors only for the frozen shard's own customers |
+| Load | 163 / 191 / 218 payments per second at 1 / 2 / 3 shard processes on 4 vCPUs; with each shard held to 0.5 CPU, **72 / 142 / 202 (1 : 1.97 : 2.79)** |
+| Replay | all **5,195** stored histories from the chaos run re-run through `decide()` came out identical |
 
 ---
 
@@ -179,11 +181,39 @@ Ownership is decided by a lock, not a table. A process owns logical shard *k* on
 
 Gateways share one bounded connection pool and give each owner a **bulkhead** of 24 requests in flight, so a frozen or overloaded shard slows only its own customers.
 
+## Observability
+
+Every shard process and gateway serves `/metrics`. Prometheus finds them through Docker's DNS, the standby and both gateway replicas included, and Grafana opens on a provisioned dashboard at `localhost:3000`. Counters come from an observer on stored events, so nothing in `decide()` knows about metrics; gauges for breakers, router scores and live attempts are refreshed by the writer thread itself, since only it may read payment state.
+
+The screenshot was taken by the CI run straight after the six chaos runs, so it shows them. Traffic leaves `axis` the moment it slows and moves to `icici`, then away from `icici` when it goes down. Breakers flash red and yellow on the timeline. Payments left at "pending" spike during the slow and reset runs, and status checks follow 90 seconds later as those payments are checked. The bottom-right panel shows logical-shard ownership changing when shard-2 is killed, and the one spike in gateway latency is the frozen shard's own customers waiting during its pause.
+
+![Grafana dashboard after the six chaos runs](docs/grafana.png)
+
+| Metric | What it shows |
+|---|---|
+| `settle_attempts_total{psp}` | Where the router sends new attempts |
+| `settle_attempt_outcomes_total{psp,outcome,blame}` | Clean successes, pending successes and failures, with who caused each failure |
+| `settle_attempts_went_pending_total{psp}` | Customers left looking at "pending" |
+| `settle_time_to_certainty_seconds{psp}` | From sending to a final answer, for attempts that went pending |
+| `settle_status_checks_total{psp}` | Checks spent against NPCI's budget |
+| `settle_breaker_state{psp}`, `settle_router_score{psp}` | Breakers (0 closed, 1 half open, 2 open) and the router's view of each PSP |
+| `settle_live_attempts`, `settle_needs_ops_payments` | Money that might still move, and payments waiting for a person |
+| `settle_owned_logical_shards`, `settle_step_seconds`, `settle_inbox_depth` | Ownership per process, and how busy each writer thread is |
+| `settle_gateway_request_seconds{route}`, `settle_gateway_shed_total` | Latency at the edge, and load shed by the bulkheads |
+
+## Replay check
+
+Every batch of events is stored with the input that caused it, in the same transaction (the `inputs` table). `python -m settle.replay` feeds those inputs back through `decide()`, either today's or a changed one (`--decide module:function`), and lists every payment whose outcome would change: its status, and the money that would be refunded.
+
+With today's rules every history must rebuild exactly. After the CI chaos run, all 5,195 did, and the simulator's histories do too, crashes and PSP contradictions included. With a planted bug switched on (`--bugs no_refund_after_expiry`), it lists the late successes that would never have been refunded. That is the check to run before changing a rule that touches money.
+
+One limit: an input that changed nothing (a duplicate callback, a refused second tap) stores no events, so no input either, and a new rule that would act on one of those cannot be judged by replay.
+
 ---
 
 ## Results
 
-Everything below was measured, on one 2-vCPU Linux VM (Ubuntu 24.04, Python 3.13, PostgreSQL 16.15, Redis 7.0, Toxiproxy 2.9.0). The PSPs are mock services with made-up profiles, so the routing and planning numbers describe those profiles, not any real bank. Raw results are in [`results/`](results/).
+Everything below was measured. The simulator, the experiments and the process-level failover tests ran on a 2-vCPU Linux VM (Ubuntu 24.04, Python 3.13, PostgreSQL 16.15, Redis 7.0, Toxiproxy 2.9.0). The chaos runs, the replay check and the load tests ran on a GitHub Actions runner (4 vCPUs, AMD EPYC 7763, 16 GB) against the images `docker compose up --build` builds and pulls, in the [`system` workflow](https://github.com/SrijaMalhar/Settle/actions/runs/43675627388), which repeats them on every push. The PSPs are mock services with made-up profiles, so the routing and planning numbers describe those profiles, not any real bank. Raw results are in [`results/`](results/) (the runner's in [`results/ci/`](results/ci/)).
 
 ### Simulator: 10,000 seeds
 
@@ -250,30 +280,38 @@ On the slow PSP the percentile plan sends 42% fewer payments to ops and spends 3
 
 ### Chaos runs in Docker
 
-All 12 services in Docker Compose, payments arriving at 30 per second through both gateways, one fault per run for 20 seconds, then I1 to I6 over the event log against the PSPs' ledgers (`python -m chaos.run_all`). Each PSP fault targets whichever PSP is carrying traffic at that moment.
+All services in Docker Compose on the official images, payments arriving at 30 per second through both gateways, one fault per run for 20 seconds, then I1 to I6 over the event log against the PSPs' ledgers (`python -m chaos.run_all`). Each PSP fault targets whichever PSP is carrying traffic at that moment, because the router moves traffic off a misbehaving PSP so quickly that a fault aimed at one it had already left would test nothing.
 
 | Run | Fault | What must hold | Measured |
 |---|---|---|---|
-| A PSP turns slow | 5 s latency toxic on the busiest PSP (`axis`) | Its payments go unknown and checks resolve them; the router moves new traffic away | 64 attempts timed out and went unknown, all later resolved. `axis` went from 247 of 307 new attempts in the 20 s before to **0** in the second half of the fault. 0 merchant errors, p95 11 ms |
-| A PSP goes down | The busiest PSP's proxy disabled (`icici`) | Its breaker opens on every shard; traffic moves | The requests in flight were cut (unknown, checked later), and those PSP-side failures opened its breaker on all three shards within **0.03 s**, so no new request was ever sent to it during the outage. 0 errors |
-| Resets mid-request | `reset_peer` after the request went out, on the busiest PSP (`axis`) | Every reset attempt is checked; none is resent | 28 attempts reset and went unknown, all resolved; no PSP received any attempt twice |
-| Kill a shard under load | `docker kill shard-2` | The standby takes over; nobody is charged twice | The standby was serving logical shards 4 to 7 **0.31 s** after the kill, recovery included. 30 payments/s before and after, 0 errors, p95 15 ms before and 20 ms in the first 5 s after |
-| Freeze a shard | `docker pause shard-1` for 10 s | No second writer; its customers wait | The owner never changed. The frozen shard's own customers waited or were shed (79 of 88 got 504/503, p95 4.6 s); **every other shard's customers: 0 errors, p95 14 ms** |
-| Lose Redis | `docker stop redis` | Shards use local health; merchants see no errors | 570 requests, **0 errors**, p95 12.6 ms |
+| A PSP turns slow | 5 s latency toxic on the busiest PSP (`axis`) | Its payments go unknown and checks resolve them; the router moves new traffic away | 92 attempts timed out and went unknown, all later resolved. `axis` went from 219 of 306 new attempts in the 20 s before to **0** in the second half of the fault. 0 merchant errors, p95 8.8 ms |
+| A PSP goes down | The busiest PSP's proxy disabled (`icici`) | Its breaker opens on every shard; traffic moves | The requests in flight were cut (unknown, checked later), and those PSP-side failures opened its breaker on all three shards within **0.03 s**. One new request was refused; none was sent after the breakers opened. 0 errors |
+| Resets mid-request | `reset_peer` after the request went out, on the busiest PSP (`axis`) | Every reset attempt is checked; none is resent | 38 attempts reset and went unknown, all resolved; no PSP received any attempt twice |
+| Kill a shard under load | `docker kill shard-2` | The standby takes over; nobody is charged twice | The standby was serving logical shards 4 to 7 **0.33 s** after the kill, recovery included. 30 payments/s before and after, **0 errors**; the dead shard's own customers waited (p95 611 ms in the first 5 s) but none failed |
+| Freeze a shard | `docker pause shard-1` for 10 s | No second writer; its customers wait | The owner never changed. The frozen shard's own customers waited or were shed (70 of 96 got 504/503, p95 4.9 s); **every other shard's customers: 0 errors, p95 9.3 ms** |
+| Lose Redis | `docker stop redis` | Shards use local health; merchants see no errors | 570 requests, **0 errors**, p95 9.9 ms |
 
-After every run, I1 and I3 to I6 held over the whole event log (0 violations). After the last one the load stopped, each PSP replayed its final statuses like a settlement file, and once nothing was in flight I2 held too: **5,071 payments, 4,337 paid, 458 closed, 276 refunded, none left waiting for a person, every one charged exactly when it was paid.** Of 5,135 merchant requests, 83 failed, all but four of them the frozen shard's own customers during its pause. (Docker does not apply `restart: always` to a container stopped with `docker kill`, so the script starts shard-2 again; it comes back waiting on the locks as the new standby.)
+After every run, I1 and I3 to I6 held over the whole event log (0 violations). After the last one the load stopped, each PSP replayed its final statuses like a settlement file, and once nothing was in flight I2 held too: **5,195 payments, 4,221 paid, 497 closed, 476 refunded, every one charged exactly when it was paid.** All 130 attempts that went unknown during the faults were resolved. One payment was still unknown when the run ended and waits in the ops queue with no money taken: escalate, don't guess. Of 5,235 merchant requests, 72 failed, all but two of them the frozen shard's own customers during its pause. (Docker does not apply `restart: always` to a container stopped with `docker kill`, so the script starts shard-2 again; it comes back waiting on the locks as the new standby.)
 
 ### Load test
 
-Locust, 64 users paying new orders as fast as Settle answers, 60 seconds per layout (`python -m loadtest.run`):
+Locust, 64 users paying new orders as fast as Settle answers, 60 seconds per layout, on the 4-vCPU runner (`python -m loadtest.run`). "Completed" leaves out the 503s the gateway bulkheads shed.
 
-| Shard processes | Payments per second | p95 latency of `POST /pay` | Shed (503) |
+| Shard processes | Completed payments per second | p95 latency of `POST /pay` | Shed (503) |
 |---|---|---|---|
-| 1 | 129.9 | 690 ms | 2.5% |
-| 2 | 160.4 | 840 ms | 1.3% |
-| 3 | 189.2 | 760 ms | 0.15% |
+| 1 | 163.1 | 640 ms | 1.0% |
+| 2 | 190.7 | 770 ms | 0.75% |
+| 3 | 218.1 | 550 ms | 0.01% |
 
-Throughput grows with shards because they share nothing, but not linearly here, and the reason is the machine: two vCPUs run all 12 services and Locust itself. During the 3-shard run the containers used about 177% CPU between them (each shard about 30%, PostgreSQL about 21%), so the host was out of CPU before any one shard or the database was. On a bigger machine the next limit would be PostgreSQL's write throughput. The 503s are the gateway bulkhead shedding load once a shard has 24 requests in flight, rather than letting latency grow without bound.
+Uncapped, one shard process can use all the CPU the machine has spare, so adding shards mostly shares out the same four vCPUs, which also run PostgreSQL, Redis, three PSPs, two gateways, Prometheus, Grafana and Locust itself. To measure the property the design is about, how capacity grows when shards share nothing, the same test was run with every shard process held to the same budget of 0.5 CPU (`python -m loadtest.run --shard-cpus 0.5`):
+
+| Shard processes, 0.5 CPU each | Completed payments per second | Scaling | p95 latency of `POST /pay` |
+|---|---|---|---|
+| 1 | 72.3 | 1.00 | 960 ms |
+| 2 | 142.4 | **1.97** | 900 ms |
+| 3 | 201.8 | **2.79** | 690 ms |
+
+Two shards do 1.97 times the work of one: nothing is shared, so nothing waits. The curve bends at three because the shards together then want about as much CPU as the runner has left, which is why 3 capped shards (202 per second) land close to 3 uncapped ones (218). On a bigger machine the next limit would be PostgreSQL's write throughput.
 
 ### What the tests caught
 
@@ -316,13 +354,18 @@ curl -X POST localhost:8000/orders/order-1/pay -H 'content-type: application/jso
 curl localhost:8001/orders/order-1                      # any gateway answers for any order
 curl localhost:8000/stats                               # PSP scores, breakers, check plans, ops queue
 
+open http://localhost:3000                              # Grafana, already on the Settle dashboard
+open http://localhost:9090                              # Prometheus
+docker compose exec shard-1 python -m settle.replay     # re-run every stored history through decide()
+
 SETTLE_HOLD_SECONDS=60 docker compose up -d --build     # shorter holds, so a chaos run finishes sooner
 pip install -e ".[load]"
+python scripts/smoke.py                                 # pay through one gateway, read through the other
 python -m chaos.run_all
-python -m loadtest.run
+python -m loadtest.run                                  # add --shard-cpus 0.5 for the capped run
 ```
 
-On a machine that cannot pull images, [`deploy/local/`](deploy/local/) runs the same services on an empty image with the host's own PostgreSQL, Redis and Python mounted in; the chaos and load numbers above were measured that way.
+The [`system` workflow](.github/workflows/system.yml) runs exactly this on every push. On a machine that cannot pull images, [`deploy/local/`](deploy/local/) runs the same services (all but Grafana) on an empty image with the host's own PostgreSQL, Redis, Prometheus and Python mounted in.
 
 ### API
 
@@ -350,12 +393,16 @@ settle/
                    timers (min-heap), feeds (observers), server (Flask), __main__
   gateway.py       crc32(order id) mod 12, forward to the current owner, bulkheads
   mockpsp.py       a mock PSP service: profiles, NPCI codes, signed callbacks, its own ledger
+  metrics.py       Prometheus metrics for shards and gateways
+  replay.py        re-run stored histories through a changed decide()
   factory.py       build_engine(settings)
 sim/               the simulator: world, PSP profiles, invariants, experiments
 chaos/             the six chaos runs and the checks over a live system
 loadtest/          the Locust file and the 1/2/3-shard runner
 tests/             unit, Hypothesis, PostgreSQL, Redis, Toxiproxy, failover, API, simulator
-deploy/            initdb.sql, toxiproxy.json, local/ (offline image)
+deploy/            initdb.sql, toxiproxy.json, prometheus.yml, grafana/ (dashboard), local/ (offline image)
+scripts/           demo, smoke test, dashboard screenshot
+.github/workflows/ ci (types, tests, simulator) and system (compose up, chaos, replay, load)
 ```
 
 ## Design notes
@@ -366,7 +413,7 @@ deploy/            initdb.sql, toxiproxy.json, local/ (offline image)
 
 **Deliberately not used.** Singletons (global state makes tests share data; everything is injected). A class per state with inheritance (a table is shorter and shows every move in one place). Redis or ZooKeeper locks for ownership: a Redis lock expires on a timer and needs fencing tokens, while an advisory lock lives on the same connection as the writes, so a process that loses it cannot keep writing.
 
-**Limits, plainly.** The PSPs are mock services with made-up profiles; the network faults and process kills are real. It runs in Docker Compose on one machine, not in production, and moves no real money. One merchant, full payments and full refunds only.
+**Limits, plainly.** The PSPs are mock services with made-up profiles; the network faults and process kills are real. It runs in Docker Compose on one machine, not in production, and moves no real money. One merchant, full payments and full refunds only. Of the spec's three stretch goals, the dashboards and the replay check are built; the Razorpay test-mode adapter is not, because it can only be tested with a Razorpay test account that has server-side UPI enabled, and an adapter that has never talked to Razorpay would be a claim rather than a feature.
 
 **How it would grow.** More logical shards (say 64) spread over more processes, since moving one is just releasing a lock and rebuilding from events; the events table partitioned by month with closed payments archived; a read replica for `GET` and `/stats`; separate PostgreSQL clusters for groups of logical shards once one database is the limit.
 

@@ -1,0 +1,35 @@
+{
+  "users": 64,
+  "seconds": 60,
+  "cpus": 4,
+  "shard_cpus": 0.5,
+  "layouts": {
+    "1 shard process": {
+      "requests": 4621,
+      "failures": 285,
+      "payments_per_s": 78.3,
+      "completed_per_s": 72.3,
+      "p50_ms": 830.0,
+      "p95_ms": 960.0,
+      "p99_ms": 990.0
+    },
+    "2 shard processes": {
+      "requests": 8622,
+      "failures": 75,
+      "payments_per_s": 146.0,
+      "completed_per_s": 142.4,
+      "p50_ms": 300.0,
+      "p95_ms": 900.0,
+      "p99_ms": 940.0
+    },
+    "3 shard processes": {
+      "requests": 12119,
+      "failures": 10,
+      "payments_per_s": 205.1,
+      "completed_per_s": 201.8,
+      "p50_ms": 300.0,
+      "p95_ms": 690.0,
+      "p99_ms": 790.0
+    }
+  }
+}

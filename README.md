@@ -313,6 +313,8 @@ Uncapped, one shard process can use all the CPU the machine has spare, so adding
 | 2 | 142.4 | **1.97** | 900 ms |
 | 3 | 201.8 | **2.79** | 690 ms |
 
+GitHub's runners differ from run to run, so absolute throughput varies between runs of the workflow (a later run on the same code measured 251 / 292 / 324 uncapped and 96 / 211 / 303 capped); the shape holds.
+
 Two shards do 1.97 times the work of one: nothing is shared, so nothing waits. The curve bends at three because the shards together then want about as much CPU as the runner has left, which is why 3 capped shards (202 per second) land close to 3 uncapped ones (218). On a bigger machine the next limit would be PostgreSQL's write throughput.
 
 ### What the tests caught

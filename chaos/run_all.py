@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import statistics
 import subprocess
@@ -32,6 +33,7 @@ from chaos.check import Ledgers, Report, check
 from settle.sharding import logical_shard
 
 PSPS = ("axis", "icici", "yes")
+AUTH = {"Authorization": f"Bearer {os.environ.get('SETTLE_MERCHANT_KEY', 'dev-merchant-key')}"}
 
 
 class Stack:
@@ -92,7 +94,7 @@ class Stack:
         self.http.post(f"{self.toxiproxy}/proxies/{proxy}", json={"enabled": on}).raise_for_status()
 
     def stats(self) -> dict[str, Any]:
-        r: dict[str, Any] = self.http.get(f"{self.gateways[0]}/stats", timeout=10).json()
+        r: dict[str, Any] = self.http.get(f"{self.gateways[0]}/stats", timeout=10, headers=AUTH).json()
         return r
 
 
@@ -113,6 +115,7 @@ class Load:
         if s is None:
             s = requests.Session()
             s.trust_env = False
+            s.headers.update(AUTH)
             self._local.s = s
         return s
 

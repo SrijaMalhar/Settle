@@ -17,6 +17,7 @@ import uuid
 from locust import FastHttpUser, constant, task
 
 GATEWAYS = [g for g in os.environ.get("SETTLE_GATEWAYS", "").split(",") if g]
+AUTH = {"Authorization": f"Bearer {os.environ.get('SETTLE_MERCHANT_KEY', 'dev-merchant-key')}"}
 
 
 class Merchant(FastHttpUser):
@@ -29,4 +30,4 @@ class Merchant(FastHttpUser):
     def pay(self) -> None:
         order = f"lt-{uuid.uuid4().hex[:16]}"
         self.client.post(f"{self.gateway}/orders/{order}/pay", json={"amount": random.randint(1_000, 5_00_000)},
-                         name="POST /orders/[id]/pay")
+                         headers=AUTH, name="POST /orders/[id]/pay")

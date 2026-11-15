@@ -24,6 +24,7 @@ x-local: &local
     SETTLE_PSP_BASE: http://toxiproxy
     SETTLE_CALLBACK_URL: http://gateway:8000
     SETTLE_HOLD_SECONDS: ${SETTLE_HOLD_SECONDS:-600}
+    SETTLE_MERCHANT_KEYS: ${SETTLE_MERCHANT_KEY:-dev-merchant-key}
 
 services:
   postgres:

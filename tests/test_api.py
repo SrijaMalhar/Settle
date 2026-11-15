@@ -146,3 +146,27 @@ def test_stats_through_the_gateway(stack: Stack) -> None:
     assert shard["psps"]["axis"]["breaker"] == "closed"
     assert shard["psps"]["axis"]["check_plan"] == [90, 270, 540]
     assert stats["missing"] == []
+
+
+def test_the_merchant_api_needs_a_key_but_psp_callbacks_do_not(pg_dsn: str, serve: Any) -> None:
+    from settle.gateway import Gateway, OwnerMap
+    from settle.gateway import create_app as gateway_app
+
+    owners = OwnerMap(pg_dsn, every=60)
+    gw = serve(gateway_app(Gateway(owners.start(), deadline=0.5), frozenset({"k-123"})))
+    http = requests.Session()
+    http.trust_env = False
+    try:
+        assert http.post(f"{gw.url}/orders/o-1/pay", json={"amount": 100}, timeout=5).status_code == 401
+        wrong = {"Authorization": "Bearer nope"}
+        assert http.post(f"{gw.url}/orders/o-1/pay", json={"amount": 100}, headers=wrong, timeout=5).status_code == 401
+        assert http.get(f"{gw.url}/stats", timeout=5).status_code == 401
+        right = {"Authorization": "Bearer k-123"}
+        # with the key it gets through to routing (no shard owns anything here, hence 503)
+        assert http.post(f"{gw.url}/orders/o-1/pay", json={"amount": 100}, headers=right, timeout=5).status_code == 503
+        # callbacks are proven by the PSP's HMAC signature at the shard, not by a merchant key
+        r = http.post(f"{gw.url}/psp/axis/callback", json={"attempt_id": "x", "status": "success"}, timeout=5)
+        assert r.status_code == 200
+        assert http.get(f"{gw.url}/health", timeout=5).status_code == 200
+    finally:
+        owners.stop()

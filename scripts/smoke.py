@@ -1,11 +1,12 @@
 """Smoke test for a running deployment: a payment end to end through both gateways, every
 Prometheus target up, and the Grafana dashboard provisioned.
 
-    python scripts/smoke.py
+    python scripts/smoke.py [--no-grafana]
 """
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 import uuid
@@ -14,6 +15,7 @@ import requests
 
 http = requests.Session()
 http.trust_env = False
+http.headers["Authorization"] = f"Bearer {os.environ.get('SETTLE_MERCHANT_KEY', 'dev-merchant-key')}"
 
 
 def wait(what: str, check: object, timeout: float = 180) -> None:
@@ -58,8 +60,16 @@ def main() -> None:
     wait("settle metrics are in Prometheus", lambda: http.get(
         "http://localhost:9090/api/v1/query", params={"query": "sum(settle_attempts_total)"}, timeout=5
     ).json()["data"]["result"])
-    wait("the Grafana dashboard is provisioned", lambda: len(
-        http.get("http://localhost:3000/api/dashboards/uid/settle", timeout=5).json()["dashboard"]["panels"]) == 17)
+    wait("Prometheus loaded the 5 alert rules", lambda: sum(
+        len(g["rules"]) for g in http.get("http://localhost:9090/api/v1/rules", timeout=5).json()["data"]["groups"]
+    ) == 5)
+    r = http.post("http://localhost:8000/orders/no-key/pay", json={"amount": 100}, timeout=5,
+                  headers={"Authorization": "Bearer wrong"})
+    assert r.status_code == 401, r.status_code
+    print("ok: a wrong merchant key gets 401")
+    if "--no-grafana" not in sys.argv:
+        wait("the Grafana dashboard is provisioned", lambda: len(
+            http.get("http://localhost:3000/api/dashboards/uid/settle", timeout=5).json()["dashboard"]["panels"]) == 17)
 
 
 if __name__ == "__main__":

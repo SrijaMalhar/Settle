@@ -9,6 +9,7 @@ simply sent again to the new one.
 from __future__ import annotations
 
 import argparse
+import hmac
 import logging
 import os
 import threading
@@ -173,12 +174,25 @@ def _route() -> str:
     return "get" if path.startswith("/orders/") else path.strip("/") or "root"
 
 
-def create_app(gw: Gateway) -> Flask:
+def create_app(gw: Gateway, merchant_keys: frozenset[str] = frozenset()) -> Flask:
+    """merchant_keys: the API keys a merchant may send as "Authorization: Bearer <key>" on /orders
+    and /stats. Empty means no check (tests and local experiments). PSP callbacks are not checked
+    here: the shard verifies their HMAC signature, which proves more than a shared key would."""
     app = Flask("settle-gateway")
 
+    def authorised() -> bool:
+        if not merchant_keys:
+            return True
+        header = request.headers.get("Authorization", "")
+        key = header[7:] if header.startswith("Bearer ") else ""
+        return any(hmac.compare_digest(key, k) for k in merchant_keys)
+
     @app.before_request
-    def start_timer() -> None:
+    def start_timer() -> ResponseReturnValue | None:
         g.started = time.perf_counter()
+        if (request.path.startswith("/orders/") or request.path == "/stats") and not authorised():
+            return jsonify({"error": "missing or wrong API key"}), 401
+        return None
 
     @app.after_request
     def count(response: Response) -> Response:
@@ -235,11 +249,14 @@ def main(argv: list[str] | None = None) -> None:
     args = ap.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
     dsn = os.environ.get("SETTLE_DATABASE_URL", "postgresql://settle:settle@localhost:5432/settle")
+    keys = frozenset(k.strip() for k in os.environ.get("SETTLE_MERCHANT_KEYS", "").split(",") if k.strip())
+    if not keys:
+        log.warning("SETTLE_MERCHANT_KEYS is empty: anyone who can reach this gateway can create payments")
     gw = Gateway(OwnerMap(dsn).start())
     from waitress import serve
 
     log.info("gateway on :%d", args.port)
-    serve(create_app(gw), host="0.0.0.0", port=args.port, threads=96, connection_limit=2000, ident=None)
+    serve(create_app(gw, keys), host="0.0.0.0", port=args.port, threads=96, connection_limit=2000, ident=None)
 
 
 if __name__ == "__main__":

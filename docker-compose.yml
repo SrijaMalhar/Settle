@@ -2,7 +2,8 @@
 # PostgreSQL, Redis, three mock PSPs behind Toxiproxy, Prometheus and Grafana, and Locust.
 #
 #   docker compose up -d --build
-#   curl -X POST localhost:8000/orders/order-1/pay -H 'content-type: application/json' -d '{"amount": 49900}'
+#   curl -X POST localhost:8000/orders/order-1/pay -H 'authorization: Bearer dev-merchant-key' \
+#        -H 'content-type: application/json' -d '{"amount": 49900}'
 #   open http://localhost:3000       # the Grafana dashboard
 #   python -m chaos.run_all          # the six chaos runs, with checks after each
 #
@@ -17,6 +18,7 @@ x-settle: &settle
     SETTLE_PSP_BASE: http://toxiproxy          # every PSP call goes through Toxiproxy
     SETTLE_CALLBACK_URL: http://gateway:8000   # PSP callbacks come back through a gateway
     SETTLE_HOLD_SECONDS: ${SETTLE_HOLD_SECONDS:-600}
+    SETTLE_MERCHANT_KEYS: ${SETTLE_MERCHANT_KEY:-dev-merchant-key}   # use a real secret outside a demo
   depends_on:
     postgres: {condition: service_healthy}
     redis: {condition: service_started}
@@ -64,7 +66,9 @@ services:
   prometheus:
     image: prom/prometheus:v2.53.2
     command: [--config.file=/etc/prometheus/prometheus.yml, --storage.tsdb.retention.time=2d]
-    volumes: [./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    volumes:
+      - ./deploy/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./deploy/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports: ["9090:9090"]
 
   grafana:

@@ -16,6 +16,7 @@ same every time.
 
 from __future__ import annotations
 
+import itertools
 import sys
 from pathlib import Path
 
@@ -24,7 +25,25 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from settle.adapters.local_health import LocalHealth  # noqa: E402
 from settle.adapters.memory_store import MemoryEventStore  # noqa: E402
 from settle.clock import FakeClock  # noqa: E402
-from settle.core.messages import AttemptMoved, CheckStatus, Event, SendRefund, SendToPsp  # noqa: E402
+from settle.core.decide import Rejected  # noqa: E402
+from settle.core.messages import (  # noqa: E402
+    AttemptMoved,
+    AttemptStarted,
+    CheckAnswered,
+    CheckSpent,
+    CheckStatus,
+    EscalatedToOps,
+    Event,
+    PaymentCreated,
+    PaymentExpired,
+    PaymentPaid,
+    RefundConfirmed,
+    RefundRetried,
+    RefundStarted,
+    SendRefund,
+    SendToPsp,
+)
+from settle.core.money import Money  # noqa: E402
 from settle.policies.checks import PercentilePlanner  # noqa: E402
 from settle.policies.routing import FixedOrderRouter  # noqa: E402
 from settle.shard.engine import PaymentEngine  # noqa: E402
@@ -49,27 +68,52 @@ class Script:
 
 
 class Printer:
+    """Prints each stored event as one line: time since the order was created, kind, detail."""
+
     def __init__(self, clock: FakeClock) -> None:
-        self.clock, self.start = clock, clock.now()
+        self.start = clock.now()
+
+    def detail(self, e: Event) -> str:
+        match e:
+            case PaymentCreated():
+                return f"{e.order_id}  {Money(e.amount)}, held {e.hold_until - e.at:.0f} s"
+            case AttemptStarted():
+                return f"{e.attempt}  to {e.psp}"
+            case AttemptMoved():
+                line = f"{e.attempt}  {e.signal} ({e.via}) -> {e.to}"
+                if e.plan:
+                    line += "   checks due " + "/".join(f"+{t - self.start:.0f}" for t in e.plan) + " s"
+                return line
+            case CheckSpent():
+                return f"{e.attempt}  status check #{e.n}"
+            case CheckAnswered():
+                return f"{e.attempt}  check #{e.n}: still pending"
+            case PaymentPaid():
+                return "fulfil the order"
+            case PaymentExpired():
+                return "hold time over" if e.reason == "hold" else e.reason
+            case EscalatedToOps():
+                return f"{e.reason}: waiting for a person"
+            case RefundStarted():
+                return f"{e.refund}  {Money(e.amount)}"
+            case RefundRetried():
+                return f"{e.refund}  try {e.n}, same refund id"
+            case RefundConfirmed():
+                return f"{e.refund}  money returned"
+        return ""
 
     def on_event(self, payment_id: str, e: Event) -> None:
-        detail = ""
-        if isinstance(e, AttemptMoved):
-            detail = f"{e.attempt}: {e.signal} via {e.via} -> {e.to}"
-            if e.plan:
-                detail += f"  (checks planned at +{', +'.join(str(round(t - self.start)) for t in e.plan)} s)"
-        else:
-            detail = ", ".join(f"{k}={v}" for k, v in e.data().items() if k not in ("payment_id", "amount", "hold_until") and v is not None)
-        print(f"  +{e.at - self.start:6.0f} s  {e.kind:<16} {detail}")
+        print(f"  +{e.at - self.start:4.0f}s  {e.kind:<16} {self.detail(e)}")
 
 
 def story(title: str) -> tuple[PaymentEngine, FakeClock, Script]:
-    print(f"\n{title}\n" + "-" * len(title))
+    print(f"\n{title}")
     clock, script = FakeClock(), Script()
+    ids = itertools.count(1)
     engine = PaymentEngine(
         store=MemoryEventStore(), psps=["axis", "icici"], router=FixedOrderRouter(["axis", "icici"]),
         planner=PercentilePlanner(), health=LocalHealth(), clock=clock, dispatcher=script,
-        subscribers=[Printer(clock)],
+        subscribers=[Printer(clock)], ids=lambda: f"{next(ids):04d}",
     )
     return engine, clock, script
 
@@ -87,40 +131,50 @@ def wait(engine: PaymentEngine, clock: FakeClock, seconds: float, script: Script
     clock.set(end)
 
 
+def outcome(e: PaymentEngine, order: str, psp: Script) -> str:
+    p = e.get(order)
+    assert p is not None
+    sends = sum(a.startswith("send") for a in psp.asked)
+    checks = sum(a.startswith("status") for a in psp.asked)
+    refunds = sum(a.startswith("refund") for a in psp.asked)
+    parts = [f"sent to the PSP {sends}x"]
+    if checks:
+        parts.append(f"{checks} status check{'s' if checks > 1 else ''}")
+    if refunds:
+        parts.append(f"refund sent {refunds}x with one id")
+    return f"  => {p.status}: " + ", ".join(parts)
+
+
 def main() -> None:
     e, clock, psp = story("1. A normal payment")
-    p = e.pay("order-1001", 49900)
-    a = p.attempts[0].id
+    a = e.pay("order-1001", 49900).attempts[0].id
     e.psp_answer(a, "accepted", via="reply")
     wait(e, clock, 12)
     e.psp_answer(a, "success", via="callback")
-    print(f"  => {e.get('order-1001').status}; merchant told: {e.notifier.recent[-1]['message']}")  # type: ignore[union-attr]
+    print(outcome(e, "order-1001", psp))
 
-    e, clock, psp = story("2. A timeout resolved by a status check")
-    p = e.pay("order-1002", 25000)
-    a = p.attempts[0].id
+    e, clock, psp = story("2. A timeout, resolved by a status check")
+    a = e.pay("order-1002", 25000).attempts[0].id
     e.psp_answer(a, "read_timeout", via="reply")  # unknown, never "failed"
     wait(e, clock, 30)
     try:
-        e.pay("order-1002", 25000)
-    except Exception as err:  # the customer taps pay again
-        print(f"  +    30 s  (second tap refused: {err})")
+        e.pay("order-1002", 25000)  # the customer taps pay again
+    except Rejected as err:
+        print(f"  +  30s  {'(second tap)':<16} refused: {err}")
     wait(e, clock, 60)  # the first check is due 90 s after sending
     e.psp_answer(a, "success", via="check", n=1)  # the callback was lost; the check finds the answer
-    print(f"  => {e.get('order-1002').status}; PSP was asked: {psp.asked}")  # type: ignore[union-attr]
+    print(outcome(e, "order-1002", psp))
 
-    e, clock, psp = story("3. A late success, refunded")
-    p = e.pay("order-1003", 79900)
-    a = p.attempts[0].id
+    e, clock, psp = story("3. A success after the order was given up, refunded")
+    a = e.pay("order-1003", 79900).attempts[0].id
     e.psp_answer(a, "accepted", via="reply")
     wait(e, clock, 640, psp)  # three checks say "pending"; the 10-minute hold runs out
-    e.psp_answer(a, "success", via="callback")  # the money arrives after the order was cancelled
-    refund = e.get("order-1003").refunds[0].id  # type: ignore[union-attr]
-    e.refund_answer(refund, confirmed=False)  # the refund times out...
-    wait(e, clock, 30)  # ...and is resent with the same refund id
+    e.psp_answer(a, "success", via="callback")  # the money arrives anyway
+    refund = f"rf-{a}"
+    e.refund_answer(refund, confirmed=False)  # the refund reply is lost...
+    wait(e, clock, 30)  # ...so it is resent with the same refund id
     e.refund_answer(refund, confirmed=True)
-    final = e.store.load(e.store.payment_of("order-1003") or "")
-    print(f"  => {final[-1].kind}; PSP was asked: {psp.asked}")
+    print(outcome(e, "order-1003", psp))
 
 
 if __name__ == "__main__":

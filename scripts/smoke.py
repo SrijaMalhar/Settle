@@ -31,14 +31,22 @@ def wait(what: str, check: object, timeout: float = 180) -> None:
 
 
 def main() -> None:
-    order = f"smoke-{uuid.uuid4().hex[:8]}"
     wait("both gateways see all 12 logical shards",
          lambda: all(http.get(f"http://localhost:{p}/health", timeout=3).json()["owners"] == 12 for p in (8000, 8001)))
-    r = http.post(f"http://localhost:8000/orders/{order}/pay", json={"amount": 49900}, timeout=10)
-    assert r.status_code == 202, r.text
-    print(f"ok: pay accepted, attempt sent to {r.json()['attempts'][0]['psp']}")
-    wait("the payment is PAID, read through the other gateway",
-         lambda: http.get(f"http://localhost:8001/orders/{order}", timeout=5).json()["status"] == "PAID", 120)
+    # Mock PSPs decline about one payment in ten and some answer slowly, so pay several orders and
+    # expect most of them, not every one, to be paid within the wait.
+    orders = [f"smoke-{uuid.uuid4().hex[:8]}" for _ in range(8)]
+    for order in orders:
+        r = http.post(f"http://localhost:8000/orders/{order}/pay", json={"amount": 49900}, timeout=10)
+        assert r.status_code == 202, r.text
+    print(f"ok: {len(orders)} payments accepted through gateway 8000")
+
+    def paid() -> bool:
+        statuses = [http.get(f"http://localhost:8001/orders/{o}", timeout=5).json()["status"] for o in orders]
+        print(f"   read through gateway 8001: {statuses}")
+        return statuses.count("PAID") >= 6
+
+    wait("most payments are PAID, read through the other gateway", paid, 180)
 
     def targets_up() -> bool:
         t = http.get("http://localhost:9090/api/v1/targets", timeout=5).json()["data"]["activeTargets"]

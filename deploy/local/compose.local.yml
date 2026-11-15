@@ -1,4 +1,4 @@
-# Run the same 12 services on a machine that cannot pull images:
+# Run the same services on a machine that cannot pull images (all but Grafana):
 #
 #   deploy/local/build-image.sh
 #   VENV=/path/to/venv docker compose -f docker-compose.yml -f deploy/local/compose.local.yml up -d --no-build
@@ -56,6 +56,14 @@ services:
   shard-3: {<<: *local}
   standby: {<<: *local}
   gateway: {<<: *local}
+
+  prometheus:
+    <<: *local
+    entrypoint: [/opt/bin/prometheus]
+    command: [--config.file=/app/deploy/prometheus.yml, --storage.tsdb.path=/tmp/prometheus]
+
+  grafana:
+    profiles: [needs-the-grafana-image]   # no Grafana build on an offline machine
 
   locust:
     <<: *local

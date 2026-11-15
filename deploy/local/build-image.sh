@@ -17,6 +17,8 @@ done
 ln -s usr/bin "$ctx/bin"; ln -s usr/lib "$ctx/lib"; ln -s usr/lib64 "$ctx/lib64"; ln -s usr/sbin "$ctx/sbin"
 toxiproxy="${TOXIPROXY_SERVER:-$(command -v toxiproxy-server || echo bin/toxiproxy-server)}"
 cp "$toxiproxy" "$ctx/opt/bin/toxiproxy-server"
+prometheus="${PROMETHEUS:-$(command -v prometheus || echo bin/prometheus)}"
+[ -x "$prometheus" ] && cp "$prometheus" "$ctx/opt/bin/prometheus"
 cat > "$ctx/Dockerfile" <<'EOF'
 FROM scratch
 COPY . /

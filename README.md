@@ -31,7 +31,7 @@ It is a sharded service: stateless gateways in front of shard processes that eac
 | **Replay** | **5,195 of 5,195** stored payment histories rebuilt exactly from their inputs |
 | **Tests** | 113, against real PostgreSQL, Redis and Toxiproxy; `mypy --strict` |
 
-[Problem](#problem) · [Guarantees](#guarantees) · [Architecture](#architecture) · [State machine](#state-machine) · [Routing](#routing-and-failure-attribution) · [Failover](#storage-and-failover) · [Observability](#observability) · [Verification](#verification) · [Getting started](#getting-started) · [API](#api) · [Design](#design-decisions)
+[Problem](#problem) · [Guarantees](#guarantees) · [Architecture](#architecture) · [State machine](#state-machine) · [Routing](#routing-and-failure-attribution) · [Failover](#storage-and-failover) · [Observability](#observability) · [Verification](#verification) · [Getting started](#getting-started) · [API](#api) · [Project structure](#project-structure)
 
 ---
 
@@ -316,36 +316,61 @@ Merchant endpoints require `Authorization: Bearer <key>` (`SETTLE_MERCHANT_KEYS`
 ## Project structure
 
 ```
-settle/
-  core/           pure domain: money, state tables, messages, decide()/apply()
-  policies/       routing and blame, circuit breaker, status-check planners
-  adapters/       PostgreSQL and in-memory stores, Redis and local health, PSP client
-  shard/          writer engine, timers, advisory-lock ownership, HTTP server
-  gateway.py      shard routing, retries, bulkheads, merchant auth
-  mockpsp.py      PSP simulator: NPCI codes, signed callbacks, ground-truth ledger
-  metrics.py      Prometheus instrumentation
-  replay.py       re-run stored histories through new rules
-sim/              deterministic simulator, invariants, experiments
-chaos/            fault scenarios and live invariant checks
-loadtest/         Locust scenarios and shard-layout runner
-tests/            116 tests
-deploy/           schema, Prometheus, alert rules and tests, Grafana, Toxiproxy
-scripts/          demo, smoke test, dashboard screenshot, demo GIF
+settle/                     the service
+├── core/                   pure domain logic: no I/O, clocks or threads
+│   ├── decide.py           decide() and apply(): every business rule
+│   ├── model.py            both state machines as transition tables
+│   ├── messages.py         inputs, stored events and commands
+│   └── money.py            amounts as integer paise
+├── policies/
+│   ├── routing.py          Thompson-sampling router, failure blame by NPCI code
+│   ├── breaker.py          per-PSP circuit breaker on the PSP's own failures
+│   └── checks.py           status-check planners within NPCI limits
+├── shard/
+│   ├── engine.py           writer thread, I/O dispatch, crash recovery
+│   ├── ownership.py        advisory-lock ownership and standby takeover
+│   ├── timers.py           due checks, expiries and refund retries
+│   ├── feeds.py            stored events feeding router, breakers, planner
+│   └── server.py           HTTP endpoints, one message per request
+├── adapters/
+│   ├── postgres_store.py   append-only event store
+│   ├── memory_store.py     in-memory store for tests and the simulator
+│   ├── redis_health.py     shared PSP health; local_health.py as fallback
+│   ├── http_psp.py         PSP client; classify.py: could the PSP have it?
+│   └── notifier.py         merchant notifications
+├── ports.py                the five interfaces between logic and adapters
+├── factory.py              builds stores, PSP clients and engine from settings
+├── gateway.py              stateless routing, bulkheads, merchant auth
+├── sharding.py             12 logical shards over any number of processes
+├── signing.py              HMAC-SHA256 callback signatures
+├── replay.py               re-runs stored inputs through decide()
+├── metrics.py              Prometheus metrics
+└── mockpsp.py              mock PSP: NPCI codes, signed callbacks, true ledger
+
+sim/                        deterministic simulator
+├── world.py                customers, truthful PSPs, a lossy network, crashes
+├── invariants.py           I1 to I7, checked from outside the engine
+├── profiles.py             PSP profiles, faults, planted-bug switches
+└── run.py                  seeds, determinism, planted bugs, experiments
+
+chaos/
+├── run_all.py              six faults on the Docker deployment under load
+└── check.py                the invariants over stored events and PSP ledgers
+
+loadtest/                   Locust load at 1, 2 and 3 shard processes
+tests/                      116 tests: unit, property, PostgreSQL, Redis, HTTP
+deploy/
+├── initdb.sql              events, orders, inputs, shard_owners
+├── prometheus.yml          scrape targets
+├── alerts.yml              alert rules; alerts_test.yml tests them in CI
+├── grafana/                provisioned data source and dashboard
+├── toxiproxy.json          one proxy per PSP
+└── local/                  runs the stack without registry access
+scripts/                    demo, demo GIF, smoke test, dashboard screenshot
+results/                    simulator, chaos, replay and load results as JSON
+.github/workflows/
+├── ci.yml                  types, tests, 1,000 sim seeds, planted bugs, alerts
+└── system.yml              Docker deployment: smoke, chaos, replay, load
 ```
 
-## Design decisions
-
-- **Functional core, imperative shell.** All rules in a pure `decide()`; the engine only performs I/O. The same code runs in production, simulation and replay.
-- **Actor per shard.** One writer thread owns state; concurrency is message passing, not locks.
-- **Event sourcing with stored inputs.** Full audit history, crash recovery by replay, and safe what-if analysis of rule changes.
-- **Ports and adapters.** The core depends on five interfaces; PostgreSQL, Redis and HTTP are swappable adapters.
-- **Transition tables over state classes.** Every legal move is visible in one place, and illegal ones raise.
-- **Advisory locks over Redis or ZooKeeper leases.** The lock lives on the same connection as the writes, so a process that loses it cannot keep writing; no fencing tokens or clock assumptions are needed.
-- **Crash-only components.** A shard that loses its database connection exits; recovery is the same code path as startup.
-
-## Limitations
-
-- PSPs are simulated; there is no integration with a real PSP sandbox.
-- Single merchant, full payments and full refunds only.
-- Runs on a single Docker host; no TLS termination or secret manager.
-- Scaling path: more logical shards across more processes, monthly partitions of the event table, a read replica for queries, and separate database clusters per shard group.
+`settle/core` performs no I/O, so the shard engine, the simulator and the replay check all run the same `decide()`.

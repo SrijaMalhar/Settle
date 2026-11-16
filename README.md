@@ -15,6 +15,10 @@
 </p>
 
 <p align="center">
+  <a href="https://srijamalhar.github.io/Settle/"><b>Open the live demo</b></a>: the real engine, running in your browser. Take a PSP down, crash Settle, plant a bug, and watch the invariants hold or catch it.
+</p>
+
+<p align="center">
   <img src="docs/demo.gif" width="933" alt="Three payments told as the events Settle stores: a normal payment, a timeout resolved by a status check, and a late success that is refunded">
 </p>
 
@@ -26,7 +30,7 @@ Settle sits between a merchant and its UPI payment service providers (PSPs). It 
 | **Failover** | standby serving **0.33 s** after `docker kill`, with **0 failed requests** |
 | **Scaling** | **1.97x** throughput at 2 shards, **2.79x** at 3, on a fixed CPU budget per shard |
 | **Chaos** | 6 fault scenarios on every code change: **0 invariant violations** |
-| **Tests** | 116, against real PostgreSQL, Redis and Toxiproxy; `mypy --strict` |
+| **Tests** | 129, against real PostgreSQL, Redis and Toxiproxy; `mypy --strict` |
 
 [Why it's hard](#why-its-hard) · [Architecture](#architecture) · [Payment lifecycle](#payment-lifecycle) · [Observability](#observability) · [Results](#results) · [Getting started](#getting-started) · [API](#api) · [Project structure](#project-structure)
 
@@ -166,6 +170,8 @@ curl -H "$KEY" localhost:8001/orders/order-1     # any gateway serves any order
 
 Gateways run on `:8000` and `:8001`, Grafana on `:3000`, Prometheus on `:9090`.
 
+The [live demo](https://srijamalhar.github.io/Settle/) needs no install: a Web Worker runs `settle/` and `sim/live.py` on CPython compiled to WebAssembly. `python scripts/build_demo.py` builds it, and the `demo` workflow publishes it after `scripts/demo_smoke.py` boots it in Chromium, switches every fault on and plants a bug.
+
 ```bash
 pip install -e ".[dev,load]"
 mypy && pytest                       # starts throwaway PostgreSQL, Redis, Toxiproxy if installed
@@ -223,6 +229,7 @@ settle/                     the service
 
 sim/                        deterministic simulator
 ├── world.py                customers, truthful PSPs, a lossy network, crashes
+├── live.py                 the same world, endless and steered by hand
 ├── invariants.py           I1 to I7, checked from outside the engine
 ├── profiles.py             PSP profiles, faults, planted-bug switches
 └── run.py                  seeds, determinism, planted bugs, experiments
@@ -232,7 +239,7 @@ chaos/
 └── check.py                the invariants over stored events and PSP ledgers
 
 loadtest/                   Locust load at 1, 2 and 3 shard processes
-tests/                      116 tests: unit, property, PostgreSQL, Redis, HTTP
+tests/                      129 tests: unit, property, PostgreSQL, Redis, HTTP
 deploy/
 ├── initdb.sql              events, orders, inputs, shard_owners
 ├── prometheus.yml          scrape targets
@@ -240,11 +247,13 @@ deploy/
 ├── grafana/                provisioned data source and dashboard
 ├── toxiproxy.json          one proxy per PSP
 └── local/                  runs the stack without registry access
-scripts/                    demo, demo GIF, smoke test, dashboard screenshot
+demo/                       browser demo: page, and a worker running Pyodide
+scripts/                    demo, GIF, demo site build, smoke tests, screenshot
 results/                    simulator, chaos, replay and load results as JSON
 .github/workflows/
 ├── ci.yml                  types, tests, 1,000 sim seeds, planted bugs, alerts
-└── system.yml              Docker deployment: smoke, chaos, replay, load
+├── system.yml              Docker deployment: smoke, chaos, replay, load
+└── demo.yml                live demo: build, test in Chromium, publish
 ```
 
 `settle/core` performs no I/O, so the shard engine, the simulator and the replay check all run the same `decide()`.

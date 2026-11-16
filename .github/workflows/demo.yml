@@ -1,0 +1,51 @@
+name: demo
+
+# The live demo: build the static site (the page, settle/ and sim/ as a zip, the Pyodide
+# runtime), prove it boots and holds in a real browser, then publish it to the gh-pages branch.
+
+on:
+  push:
+    branches: [main]
+    paths: ["demo/**", "settle/**", "sim/**", "scripts/build_demo.py", "scripts/demo_smoke.py", ".github/workflows/demo.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: demo
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Pyodide runtime
+        run: npm install --no-save --prefix "$RUNNER_TEMP/py" pyodide@0.29.5
+
+      - name: Build the site
+        run: python scripts/build_demo.py --pyodide "$RUNNER_TEMP/py/node_modules/pyodide" --out _site
+
+      - name: Boot it in a browser, break everything, plant a bug
+        run: |
+          pip install playwright
+          python -m playwright install --with-deps chromium
+          python scripts/demo_smoke.py --site _site
+
+      - name: Publish to gh-pages
+        working-directory: _site
+        run: |
+          git init -q -b gh-pages
+          git config user.name "Srija Malhar"
+          git config user.email "srijamalhar@gmail.com"
+          git add -A
+          git commit -q -m "Live demo for ${GITHUB_SHA::7}"
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" gh-pages

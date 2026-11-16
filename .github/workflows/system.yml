@@ -6,7 +6,7 @@ name: system
 on:
   push:
     branches: [main]
-    paths-ignore: ["**.md", "docs/**", "results/**"]
+    paths-ignore: ["**.md", "docs/**", "results/**", "demo/**", "scripts/build_demo.py", "scripts/demo_smoke.py", ".github/workflows/demo.yml"]
   workflow_dispatch:
 
 jobs:

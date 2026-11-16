@@ -12,3 +12,5 @@ dist/
 results/raw/
 *.log
 bin/
+_site/
+node_modules/
